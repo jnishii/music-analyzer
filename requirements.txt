@@ -1,2 +1,2 @@
-# pip install -e '.[transcribe,analysis,dev]' と同じ
--e .[transcribe,analysis,dev]
+# pip install -e '.[transcribe,analysis,score,dev]' と同じ
+-e .[transcribe,analysis,score,dev]

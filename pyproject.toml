@@ -14,6 +14,8 @@ dependencies = ["numpy"]
 transcribe = ["torch", "piano_transcription_inference"]
 # 演奏分析の図
 analysis = ["pandas", "matplotlib"]
+# 楽譜の表示(元の楽譜と演奏から書き起こした楽譜の比較)
+score = ["music21", "verovio"]
 dev = ["pytest"]
 
 [tool.setuptools.packages.find]

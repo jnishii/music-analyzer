@@ -640,6 +640,9 @@ async function openProject(name) {
     $('proj-name').textContent = `${d.name}(${Math.round(d.duration)} 秒)` + (sv ? ` 保存 ${sv.saved_at}` : '');
     $('link-midi').classList.toggle('disabled', !sv);
     $('link-midi').href = `/api/projects/${encodeURIComponent(d.name)}/midi`;
+    // 楽譜との比較は別の画面(performance_analysis の側)。保存した MIDI をファイルで渡す
+    $('link-score').classList.remove('disabled');
+    $('link-score').href = `http://${location.hostname}:8766/?perf=${encodeURIComponent('editor:' + d.name)}`;
     updatePanel(); draw();
     await refreshProjects(d.name);
     const [ab, rr] = await Promise.all([api(`/api/projects/${encodeURIComponent(name)}/audio`),

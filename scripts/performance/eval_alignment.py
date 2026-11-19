@@ -25,7 +25,9 @@ import sys
 import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'src'))
-from music_io import midi, pedb  # noqa: E402
+import glob  # noqa: E402
+
+from music_io import midi, musicxml, pedb  # noqa: E402
 from performance_analysis import align  # noqa: E402
 
 # 調整に使う曲(採譜の評価で guided の調整に使った8演奏の曲)
@@ -40,6 +42,7 @@ ap.add_argument('--trans', default='output/transcription')
 ap.add_argument('--out', default='output/alignment')
 ap.add_argument('--params', help='align.PARAMS を上書きする JSON')
 ap.add_argument('--quiet', action='store_true')
+ap.add_argument('--score', choices=['fmt3x', 'xml'], default='fmt3x', help='楽譜の読み込み元(xml は MusicXML を music_io.musicxml で読む)')
 a = ap.parse_args()
 root = pedb.data_dir(a.data)
 perfs = a.perfs or pedb.list_performances(root)
@@ -74,6 +77,8 @@ rows_out = []
 for p in perfs:
     f = pedb.perf_files(root, p)
     tpqn, score, dups = pedb.load_fmt3x(f['fmt3x'], grace=True)
+    if a.score == 'xml':   # 正解の楽譜音の集合は fmt3x のまま、対応付けにだけ MusicXML を使う
+        xtpqn, xscore, xdups = musicxml.load_musicxml(glob.glob(os.path.join(f['dir'], '*.xml'))[0])
     match, _ = pedb.load_match(f['match'])
     ref = midi.read_midi_notes(f['mid'])
     canon = {i: sorted(g)[0] for g in dups for i in g}
@@ -102,7 +107,10 @@ for p in perfs:
         lab = {j: ref_lab.get(km[j], ('*', -1)) if j in km else ('*', -1) for j in range(len(perf))}
     # align は発音順に並べ替えた番号を返すので、元の番号に戻す
     order = np.lexsort((perf[:, 2], perf[:, 0]))
-    res, miss = align.align(tpqn, score, dups, perf, params)
+    if a.score == 'xml':
+        res, miss = align.align(xtpqn, xscore, xdups, perf, params)
+    else:
+        res, miss = align.align(tpqn, score, dups, perf, params)
     pred = {int(order[r['id']]): (cid(r['note_id']), r['status']) for r in res}
 
     # 楽譜音 -> 演奏音(状態0)
@@ -135,14 +143,14 @@ for p in perfs:
               f"  余分 正解{r['extra_true']} 推定{r['extra_pred']} 一致{r['extra_hit']}", flush=True)
 
 t = tot
-print(f"\n== {a.source}, {a.split}: {len(perfs)}演奏 ==")
+print(f"\n== {a.source}, {a.split}, 楽譜 {a.score}: {len(perfs)}演奏 ==")
 print(f"演奏音のラベルの正解率 {ratio(t['label_ok'], t['n_perf']):.4f}   楽譜音の対応の正解率 {ratio(t['score_ok'], t['n_score']):.4f}")
 print(f"抜けた音  正解 {t['miss_true']} 推定 {t['miss_pred']}  適合率 {ratio(t['miss_hit'], t['miss_pred']):.3f} 再現率 {ratio(t['miss_hit'], t['miss_true']):.3f}")
 print(f"余分な音  正解 {t['extra_true']} 推定 {t['extra_pred']}  適合率 {ratio(t['extra_hit'], t['extra_pred']):.3f} 再現率 {ratio(t['extra_hit'], t['extra_true']):.3f}")
 print(f"装飾の音  正解 {t['orn_true']}  ラベルの正解率 {ratio(t['orn_ok'], t['orn_true']):.3f}")
 print(f"演奏ごとの楽譜音の対応の正解率: 最小 {min(r['score_ok'] / r['n_score'] for r in rows_out):.4f}  "
       f"中央値 {np.median([r['score_ok'] / r['n_score'] for r in rows_out]):.4f}")
-path = os.path.join(a.out, f'eval_{a.source}_{a.split}.csv')
+path = os.path.join(a.out, f'eval_{a.source}_{a.split}' + ('_xml' if a.score == 'xml' else '') + '.csv')
 with open(path, 'w', newline='') as fo:
     w = csv.DictWriter(fo, fieldnames=list(rows_out[0]))
     w.writeheader()

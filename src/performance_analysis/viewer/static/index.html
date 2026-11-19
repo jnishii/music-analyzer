@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>楽譜と演奏の比較</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>楽譜と演奏の比較</h1>
+  <label>楽譜
+    <select id="score-sel"></select>
+    <input id="score-path" type="text" placeholder="または MusicXML のパス" size="26">
+  </label>
+  <label>演奏
+    <select id="perf-sel"></select>
+    <input id="perf-path" type="text" placeholder="または MIDI のパス" size="22">
+  </label>
+  <button id="btn-show" class="primary">表示</button>
+  <button id="btn-reload" title="採譜の GUI で保存し直したあとに">読み直す</button>
+  <label>並べ方
+    <select id="layout">
+      <option value="both">左右</option>
+      <option value="orig">元の楽譜だけ</option>
+      <option value="perf">演奏の楽譜だけ</option>
+    </select>
+  </label>
+  <label><input id="sync" type="checkbox" checked>スクロールを合わせる</label>
+</header>
+<main>
+  <section class="pane" id="pane-orig"><h2>元の楽譜</h2><div class="sheet" id="orig"></div></section>
+  <section class="pane" id="pane-perf"><h2>演奏から書き起こした楽譜</h2><div class="sheet" id="perf"></div></section>
+  <aside>
+    <h2>違い</h2>
+    <div id="summary"></div>
+    <ul id="legend"></ul>
+    <ol id="diffs"></ol>
+    <p class="note">
+      元の楽譜には、弾かれなかった音・弾き間違えた音・リズムの違う音に色を付ける。
+      演奏の楽譜には、余分な音・弾き間違えた音(弾いた音高)・リズムの違う音に色を付ける。
+      リズムは、前後の音から求めたその場のテンポで 1/4 拍かつ 80ms 以上ずれた音。半拍以上ずれた音は、
+      演奏の楽譜でずれた位置に置く。装飾(トリルなど)の実際の音は書かない。
+    </p>
+  </aside>
+</main>
+<footer id="status">楽譜と演奏を選んで「表示」を押してください。</footer>
+<script src="app.js"></script>
+</body>
+</html>

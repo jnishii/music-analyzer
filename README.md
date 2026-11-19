@@ -13,6 +13,7 @@ src/
     midi.py              MIDIの読み書き(音符・ダンパーペダル)。外部ライブラリ不要
     audio.py             WAVの読み込み、標本化周波数の変換
     pedb.py              PEDB の読み込み(fmt3x, match, 演奏名 -> 曲名)
+    musicxml.py          MusicXML の読み込み(fmt3x と同じ形。PEDB の全曲で fmt3x と照合済み)、音符に色を付けた書き出し
   piano_transcribe/      録音 -> 演奏MIDI                      依存: music_io
     kong.py              高解像度ピアノ採譜モデル(Kong ら)。torch が必要
     refine.py            人が直した音を、録音(モデルのフレームごとの出力)に合わせて詰め直す
@@ -23,13 +24,16 @@ src/
     melody.py            旋律の判定(暫定: 上段の最高音)
   performance_analysis/  楽譜と演奏MIDIの対比                  依存: music_io, score_analysis
     align.py             演奏MIDIと楽譜の対応付け(matchファイルと同じ形で出力)
+    notation.py          演奏を楽譜に書き起こし、元の楽譜との違い(抜け・余分・弾き間違い・リズム)を求める
+    viewer/              元の楽譜と演奏から書き起こした楽譜を並べて表示する GUI
     note_table.py        音符1つを1行とする表(局所テンポ、タイミングのずれ、ベロシティ など)
 scripts/
   transcribe/            editor.py, eval_transcription.py, report_kong.py, transcribe_to_midi.py
 docs/
   kong_evaluation.md     採譜モデルの詳しい評価(打鍵・離鍵・ベロシティ・ペダル)と改善の検討
   alignment_evaluation.md  演奏MIDIと楽譜の対応付けの評価、全自動の表と人手の表の比較
-  performance/           make_note_tables.py, align_midi.py, eval_alignment.py, compare_note_tables.py, plot_tempo.py
+  performance/           score_viewer.py, make_note_tables.py, align_midi.py, eval_alignment.py, compare_note_tables.py,
+                         check_musicxml.py, plot_tempo.py
 tests/
   test_dependencies.py   上の依存の向きが守られているかの検査
 ```
@@ -41,7 +45,7 @@ tests/
 
 ```sh
 python3 -m venv .venv
-.venv/bin/pip install -e '.[transcribe,analysis,dev]'    # requirements.txt と同じ
+.venv/bin/pip install -e '.[transcribe,analysis,score,dev]'    # requirements.txt と同じ
 # 採譜モデルの重み(約170MB、git の管理外)
 mkdir -p models
 curl -L -o "models/CRNN_note_F1=0.9677_pedal_F1=0.9186.pth" \
@@ -96,6 +100,25 @@ python3 scripts/transcribe/editor.py          # ブラウザで http://127.0.0.1
 5. ⌘/Ctrl+S で保存。`output/editor/<名前>/` に project.json(修正の記録)と MIDI ができる
 
 再生の MIDI の音は簡単な合成音(確認用)。ペダルは表示のみで、編集はできない。
+
+## 楽譜と演奏の比較(GUI)
+
+```sh
+python3 scripts/performance/score_viewer.py   # ブラウザで http://127.0.0.1:8766/ を開く
+```
+
+- 楽譜: PEDB の演奏名(その曲の MusicXML)か、MusicXML のパス
+- 演奏: PEDB の人手の対応付け / 同時記録MIDI / 採譜モデルの出力、採譜の GUI で保存した MIDI、MIDI のパス。
+  人手の対応付け以外は、楽譜と自動で対応付ける
+- 左に元の楽譜、右に演奏から書き起こした楽譜を表示する。書き起こしは元の楽譜の小節・拍子・調を型にし、
+  演奏した音を置き直したもの(弾かれなかった音は休符、余分な音は格子に丸めた位置、装飾の実際の音は書かない)
+- 違いに色を付ける: 赤 = 抜け(元の楽譜)/ 余分(演奏の楽譜)、橙 = 弾き間違い、紫 = リズム
+  (その場のテンポで 1/4 拍かつ 80ms 以上のずれ。半拍以上ずれた音は演奏の楽譜でずれた位置に置く)
+- 右の一覧をクリックすると、両方の楽譜がその小節に移る。種類ごとに一覧を絞り込める。スクロールは両方で合わせられる
+- 採譜の GUI の「楽譜と比べる」から、保存した MIDI をそのまま開ける(両方のサーバーを起動しておく)
+
+採譜モデルの出力を使うときの「違い」には、演奏の違いと採譜の誤りの両方が含まれる。採譜の GUI で直してから比べるとよい。
+繰り返し記号は展開しない(楽譜に書かれた順のまま)。演奏の楽譜ではスラー・ペダル記号を省く。
 
 ## PEDB のファイルについて
 

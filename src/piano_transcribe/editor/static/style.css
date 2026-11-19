@@ -25,7 +25,7 @@ header h1 { font-size: 15px; margin: 0 8px 0 0; font-weight: 600; }
 #dirty.on::after { content: " ●"; color: var(--user); }
 #proj-name { color: var(--text-2); margin-left: auto; }
 .group { display: flex; align-items: center; gap: 4px; }
-button, select, input[type=text], input[type=number], .file-btn, #link-midi {
+button, select, input[type=text], input[type=number], .file-btn, #link-midi, #link-score {
   font: inherit; color: var(--text); background: #fff; border: 1px solid var(--border);
   border-radius: 6px; padding: 4px 9px; cursor: pointer; text-decoration: none;
 }
@@ -34,7 +34,7 @@ button:hover, .file-btn:hover { background: var(--surface-2); }
 button:disabled { color: var(--muted); cursor: default; background: #fff; }
 button.primary { border-color: var(--model); color: var(--model); font-weight: 600; }
 .file-btn input { display: none; }
-#link-midi.disabled { color: var(--muted); pointer-events: none; }
+#link-midi.disabled, #link-score.disabled { color: var(--muted); pointer-events: none; }
 .slider { display: flex; align-items: center; gap: 4px; color: var(--text-2); }
 .slider input { width: 80px; }
 label { color: var(--text-2); user-select: none; }
