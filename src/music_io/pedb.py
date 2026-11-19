@@ -38,6 +38,15 @@ def perf_files(root, perf):
     return dict(dir=d, wav=one('*.wav'), mid=one('*.mid'), fmt3x=one('*fmt3x.txt'), match=one('*auto_match*.txt'))
 
 
+NAMES = ['C', 'C#', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'G#', 'A', 'Bb', 'B']
+
+
+def pitch_name(p):
+    """MIDI番号 -> 音名(例: 60 -> C4)"""
+    p = int(p)
+    return f'{NAMES[p % 12]}{p // 12 - 1}'
+
+
 PC = {'C': 0, 'D': 2, 'E': 4, 'F': 5, 'G': 7, 'A': 9, 'B': 11}
 
 
@@ -49,8 +58,16 @@ def midi_pitch(name):
     return 12 * (int(m.group(3)) + 1) + PC[m.group(1)] + acc
 
 
-def load_fmt3x(path):
-    """戻り値: (TPQN, {音符ID: 音符情報}, 共有音のグループのリスト)"""
+GRACE_TYPES = ('short-app', 'after-note')
+
+
+def load_fmt3x(path, grace=False):
+    """戻り値: (TPQN, {音符ID: 音符情報}, 共有音のグループのリスト)
+
+    grace=True のときは装飾音符(short-app: 前打音, after-note: 後打音)も含める。
+    装飾音符は主音と同じ楽譜時刻を持ち、order(6列目)が同じ時刻・同じ声部の中での演奏順を表す。
+    音符情報の kind は 'chord'(通常の音)か装飾音符の種類。
+    """
     tpqn = None
     notes, dups = {}, []
     for line in open(path, encoding='utf-8', errors='replace'):
@@ -66,16 +83,16 @@ def load_fmt3x(path):
         if line.startswith('//') or not line.strip():
             continue
         c = line.split('\t')
-        if len(c) < 9 or c[6] != 'chord':
+        if len(c) < 9 or not (c[6] == 'chord' or (grace and c[6] in GRACE_TYPES)):
             continue
-        stime, bar, staff, voice = int(c[0]), int(c[1]), int(c[2]), int(c[3])
+        stime, bar, staff, voice, order = int(c[0]), int(c[1]), int(c[2]), int(c[3]), int(c[5])
         dur, n = int(c[7]), int(c[8])
         pitches, nots, ids = c[9:9 + n], c[9 + n:9 + 2 * n], c[9 + 2 * n:9 + 3 * n]
         for p, o, i in zip(pitches, nots, ids):
             main = p.split(',')[0]  # 装飾音は "B4,C5,A4" のように並ぶ。先頭が主音
             notes[i] = dict(note_id=i, stime=stime, bar=bar, staff=staff, voice=voice,
                             dur_ticks=dur, pitch_name=main, pitch=midi_pitch(main),
-                            ornament=o if o != 'N..' else '', ornament_notes=p)
+                            ornament=o if o != 'N..' else '', ornament_notes=p, kind=c[6], order=order)
     return tpqn, notes, dups
 
 
@@ -97,3 +114,17 @@ def load_match(path):
                          vel=int(c[4]), offvel=int(c[5]), status=int(c[7]), stime=int(c[8]),
                          note_id=c[9], err=int(c[10])))
     return perf, missing
+
+
+def write_match(path, perf, missing, score=None):
+    """load_match の形の対応付けを、matchファイルと同じ形式で書き出す(人が確認・修正できるように)。
+    score を渡すと、弾かれなかった楽譜音の楽譜時刻も書く"""
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write('//Version: ScorePerfmMatch_v170104\n')
+        f.write('// 自動の対応付け(music-analysis performance_analysis/align.py)\n')
+        for p in sorted(perf, key=lambda p: p['on']):
+            f.write('\t'.join(map(str, [p['id'], f"{p['on']:.6f}", f"{p['off']:.6f}", p['pitch_name'], p['vel'],
+                                        p.get('offvel', 0), 0, p['status'], p['stime'], p['note_id'], p['err'], '-'])) + '\n')
+        for i in missing:
+            st = score[i]['stime'] if score and i in score else -1
+            f.write(f'//Missing {st}\t{i}\n')

@@ -9,6 +9,8 @@ import numpy as np
 from music_io import pedb
 from score_analysis import melody
 
+from . import align
+
 COLS = ['performance', 'note_id', 'bar', 'beat', 'staff', 'voice', 'pitch', 'pitch_name', 'dur_beats', 'ornament',
         'melody', 'status', 'n_perf_notes', 'onset', 'offset', 'velocity', 'velocity_z', 'local_tempo_bpm',
         'timing_dev_ms', 'event_dev_ms', 'chord_async_ms', 'articulation']
@@ -29,10 +31,26 @@ def local_fit(x, y, x0, half):
 
 
 def analyze(root, perf, half_beats=4.0):
-    """1演奏分の表(行のリスト)と要約を返す。half_beats: テンポを平滑化する窓の半幅(四分音符)"""
+    """PEDB の1演奏について、matchファイル(人手で修正済みの対応付け)から表を作る"""
     f = pedb.perf_files(root, perf)
     tpqn, score, dups = pedb.load_fmt3x(f['fmt3x'])
     match, missing = pedb.load_match(f['match'])
+    return analyze_match(perf, tpqn, score, dups, match, missing, half_beats)
+
+
+def analyze_midi(perf, fmt3x_path, notes, half_beats=4.0, params=None):
+    """演奏の音符の配列 [発音秒, 離鍵秒, 音高, ベロシティ](MIDI や採譜の結果)を楽譜と対応付けてから表を作る。
+    戻り値: (行のリスト, 要約, 対応付けの結果(演奏音のリスト, 弾かれなかった楽譜音ID))"""
+    tpqn, gscore, dups = pedb.load_fmt3x(fmt3x_path, grace=True)
+    match, missing = align.align(tpqn, gscore, dups, notes, params)
+    _, score, _ = pedb.load_fmt3x(fmt3x_path)
+    rows, summ = analyze_match(perf, tpqn, score, dups, match, missing, half_beats)
+    return rows, summ, (match, missing)
+
+
+def analyze_match(perf, tpqn, score, dups, match, missing, half_beats=4.0):
+    """1演奏分の表(行のリスト)と要約を返す。match, missing は load_match の形。
+    half_beats: テンポを平滑化する窓の半幅(四分音符)"""
 
     # 楽譜音符ごとに演奏音を集める(装飾音は複数の演奏音が1つの楽譜音に対応)
     by_id = {}

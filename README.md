@@ -20,12 +20,14 @@ src/
   score_analysis/        楽譜の分析                            依存: music_io
     melody.py            旋律の判定(暫定: 上段の最高音)
   performance_analysis/  楽譜と演奏MIDIの対比                  依存: music_io, score_analysis
+    align.py             演奏MIDIと楽譜の対応付け(matchファイルと同じ形で出力)
     note_table.py        音符1つを1行とする表(局所テンポ、タイミングのずれ、ベロシティ など)
 scripts/
   transcribe/            eval_transcription.py, report_kong.py, transcribe_to_midi.py
 docs/
   kong_evaluation.md     採譜モデルの詳しい評価(打鍵・離鍵・ベロシティ・ペダル)と改善の検討
-  performance/           make_note_tables.py, plot_tempo.py
+  alignment_evaluation.md  演奏MIDIと楽譜の対応付けの評価、全自動の表と人手の表の比較
+  performance/           make_note_tables.py, align_midi.py, eval_alignment.py, compare_note_tables.py, plot_tempo.py
 tests/
   test_dependencies.py   上の依存の向きが守られているかの検査
 ```
@@ -66,7 +68,11 @@ python3 scripts/transcribe/eval_transcription.py            # 3方式の比較 -
 python3 scripts/transcribe/report_kong.py                   # Kong の詳しい評価 -> output/transcription/kong_report/
 
 # 楽譜と演奏の対比
-python3 scripts/performance/make_note_tables.py             # -> output/note_tables/
+python3 scripts/performance/make_note_tables.py             # 人手の match から -> output/note_tables/
+python3 scripts/performance/make_note_tables.py --source kong   # 録音 -> Kong -> 自動の対応付け -> output/note_tables_kong/
+python3 scripts/performance/align_midi.py --midi 演奏.mid --fmt3x 楽譜_fmt3x.txt --out 出力   # 任意の MIDI を対応付け
+python3 scripts/performance/eval_alignment.py --source midi --split test    # 対応付けの評価
+python3 scripts/performance/compare_note_tables.py output/note_tables_kong  # 自動の表と人手の表の比較
 python3 scripts/performance/plot_tempo.py bac-inv001-o-p1 bac-inv001-s-p1 bac-inv001-o-p2 bac-inv001-s-p2
 
 python3 -m pytest tests
