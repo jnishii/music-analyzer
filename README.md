@@ -15,6 +15,8 @@ src/
     pedb.py              PEDB の読み込み(fmt3x, match, 演奏名 -> 曲名)
   piano_transcribe/      録音 -> 演奏MIDI                      依存: music_io
     kong.py              高解像度ピアノ採譜モデル(Kong ら)。torch が必要
+    refine.py            人が直した音を、録音(モデルのフレームごとの出力)に合わせて詰め直す
+    editor/              採譜の確認・修正用の GUI(ブラウザで開く。標準ライブラリのサーバー + HTML/JS)
     guided.py            楽譜情報つきの推定(学習済みモデルなし)、下書きの音の楽譜への割り当て
     evaluate.py          推定と正解の比較(音符単位のF1、発音誤差、ベロシティ、ペダル)
   score_analysis/        楽譜の分析                            依存: music_io
@@ -23,7 +25,7 @@ src/
     align.py             演奏MIDIと楽譜の対応付け(matchファイルと同じ形で出力)
     note_table.py        音符1つを1行とする表(局所テンポ、タイミングのずれ、ベロシティ など)
 scripts/
-  transcribe/            eval_transcription.py, report_kong.py, transcribe_to_midi.py
+  transcribe/            editor.py, eval_transcription.py, report_kong.py, transcribe_to_midi.py
 docs/
   kong_evaluation.md     採譜モデルの詳しい評価(打鍵・離鍵・ベロシティ・ペダル)と改善の検討
   alignment_evaluation.md  演奏MIDIと楽譜の対応付けの評価、全自動の表と人手の表の比較
@@ -77,6 +79,23 @@ python3 scripts/performance/plot_tempo.py bac-inv001-o-p1 bac-inv001-s-p1 bac-in
 
 python3 -m pytest tests
 ```
+
+## 採譜の確認・修正(GUI)
+
+```sh
+python3 scripts/transcribe/editor.py          # ブラウザで http://127.0.0.1:8765/ を開く
+```
+
+1. 録音(WAV、PCM 16/24/32bit)のパスを入れて「読み込む」か、「WAV を選ぶ」。採譜モデルが MIDI を作る
+   (初回はモデルの読み込みに約1分、採譜は録音の長さの約1/3の時間)
+2. スペースで再生。「録音 / MIDI / 両方」を切り替え、音量を調整して聴き比べる
+3. ピアノロールで直す: ダブルクリックで追加、Delete で削除、ドラッグで移動(上下で音高)、右端で長さ、↑↓ で音高。
+   「見落としの候補」を表示すると、モデルがしきい値未満で落とした音を点線で示す(ダブルクリックで受け入れ)
+4. R(選択した音)/ Shift+R(修正した音すべて)で再調整: その音高・その時刻の近くで、録音に対するモデルの出力から
+   発音時刻・ベロシティ・離鍵を決め直す。録音に手がかりがない音は赤い点線になり、指定した時刻のまま残る
+5. ⌘/Ctrl+S で保存。`output/editor/<名前>/` に project.json(修正の記録)と MIDI ができる
+
+再生の MIDI の音は簡単な合成音(確認用)。ペダルは表示のみで、編集はできない。
 
 ## PEDB のファイルについて
 

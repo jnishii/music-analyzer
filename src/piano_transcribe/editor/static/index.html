@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>採譜の確認・修正</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>採譜の確認・修正<span id="dirty" title="保存していない変更があります"></span></h1>
+  <div class="group">
+    <select id="projects" title="作ったことのあるプロジェクト"></select>
+    <button id="btn-open-project">開く</button>
+  </div>
+  <div class="group">
+    <input id="wav-path" type="text" placeholder="録音(WAV)のパス 例: ~/rec/take1.wav" size="34">
+    <button id="btn-open-path">読み込む</button>
+  </div>
+  <div class="group">
+    <label class="file-btn">WAV を選ぶ<input id="wav-file" type="file" accept=".wav,audio/wav"></label>
+  </div>
+  <div id="proj-name"></div>
+</header>
+
+<div id="toolbar">
+  <button id="btn-play" title="スペース">▶ 再生</button>
+  <div class="group" role="radiogroup" title="再生する音">
+    <label><input type="radio" name="mode" value="audio">録音</label>
+    <label><input type="radio" name="mode" value="midi">MIDI</label>
+    <label><input type="radio" name="mode" value="both" checked>両方</label>
+  </div>
+  <label class="slider">録音<input id="vol-audio" type="range" min="0" max="1" step="0.05" value="0.8"></label>
+  <label class="slider">MIDI<input id="vol-midi" type="range" min="0" max="1" step="0.05" value="0.6"></label>
+  <div class="group">
+    <button id="btn-zoom-out" title="Ctrl/⌘ + ホイール でも拡大縮小">－</button>
+    <button id="btn-zoom-in">＋</button>
+  </div>
+  <label><input id="show-roll" type="checkbox" checked>モデルの出力</label>
+  <label><input id="show-cand" type="checkbox">見落としの候補</label>
+  <div class="group">
+    <button id="btn-refine-sel" title="R">選択した音を再調整</button>
+    <button id="btn-refine-all" title="Shift+R">修正した音をすべて再調整</button>
+  </div>
+  <div class="group">
+    <button id="btn-undo" title="⌘/Ctrl+Z">元に戻す</button>
+    <button id="btn-redo" title="⌘/Ctrl+Shift+Z">やり直し</button>
+  </div>
+  <div class="group">
+    <button id="btn-save" class="primary" title="⌘/Ctrl+S">保存</button>
+    <a id="link-midi" href="#" class="disabled">MIDI をダウンロード</a>
+  </div>
+</div>
+
+<main>
+  <div id="roll-wrap"><canvas id="roll"></canvas></div>
+  <aside>
+    <section>
+      <h2>選択した音</h2>
+      <dl id="sel-info"><dt>なし</dt></dl>
+      <label class="vel">ベロシティ <input id="sel-vel" type="number" min="1" max="127" disabled></label>
+    </section>
+    <section>
+      <h2>音の数</h2>
+      <dl id="counts"></dl>
+    </section>
+    <section>
+      <h2>色</h2>
+      <ul class="legend">
+        <li><span class="sw model"></span>モデルの出力のまま</li>
+        <li><span class="sw user"></span>人が追加・修正した音</li>
+        <li><span class="sw cand"></span>受け入れた候補</li>
+        <li><span class="sw candidate"></span>見落としの候補(未確認)</li>
+        <li><span class="sw weak"></span>再調整で録音に手がかりがなかった音</li>
+      </ul>
+      <p class="note">濃さはベロシティ。背景の青はモデルが「鳴っている」と判断した度合い。</p>
+    </section>
+    <section>
+      <h2>操作</h2>
+      <ul class="keys">
+        <li><kbd>スペース</kbd> 再生 / 停止(上の目盛りをクリックした位置から)</li>
+        <li><kbd>P</kbd> 選択した音の前後を再生</li>
+        <li>クリック 選択 / <kbd>Shift</kbd>+クリック 追加選択 / 空いた所をドラッグ 範囲選択</li>
+        <li>ドラッグ 移動(上下で音高) / 右端をドラッグ 長さ</li>
+        <li>空いた所をダブルクリック 音を追加</li>
+        <li>候補をダブルクリック or <kbd>Enter</kbd> 受け入れる</li>
+        <li><kbd>Delete</kbd> 削除(候補なら却下)</li>
+        <li><kbd>↑</kbd><kbd>↓</kbd> 音高 ±1(<kbd>Shift</kbd> で ±12) / <kbd>←</kbd><kbd>→</kbd> 時刻 ±10ms</li>
+        <li><kbd>R</kbd> 選択した音を再調整 / <kbd>Shift</kbd>+<kbd>R</kbd> 修正した音をすべて</li>
+        <li>ホイール 上下 / <kbd>Shift</kbd>+ホイール 左右 / <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+ホイール 拡大縮小</li>
+        <li>左の鍵盤をクリック その音を鳴らす</li>
+      </ul>
+    </section>
+  </aside>
+</main>
+<footer id="status">録音(WAV)を読み込むか、プロジェクトを開いてください。</footer>
+
+<div id="overlay" hidden>
+  <div class="box">
+    <div id="overlay-msg">採譜中</div>
+    <progress id="overlay-progress" max="1" value="0"></progress>
+    <div id="overlay-detail"></div>
+  </div>
+</div>
+<script src="app.js"></script>
+</body>
+</html>

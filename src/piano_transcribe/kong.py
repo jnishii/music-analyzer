@@ -57,13 +57,36 @@ class Transcriber:
         self.pt.model.to(device)
         self.pt.model.eval()
 
-    def transcribe(self, x, sr):
-        """戻り値: (音符の配列 [発音秒, 離鍵秒, 音高, ベロシティ], ペダル区間の配列 [踏んだ秒, 離した秒])"""
+    def transcribe(self, x, sr, keep_output=False):
+        """戻り値: (音符の配列 [発音秒, 離鍵秒, 音高, ベロシティ], ペダル区間の配列 [踏んだ秒, 離した秒])
+        keep_output=True なら、フレームごとの出力(OUTPUT_KEYS、100フレーム/秒 × 88鍵)も3つ目に返す"""
         import torch
         y = audio.resample(np.asarray(x, np.float32), sr, SR)
         with torch.no_grad():
             d = self.pt.transcribe(y, None)
-        notes = np.array(sorted((e['onset_time'], e['offset_time'], e['midi_note'], e['velocity'])
-                                for e in d['est_note_events'])).reshape(-1, 4)
-        pedal = np.array(sorted((e['onset_time'], e['offset_time']) for e in d['est_pedal_events'])).reshape(-1, 2)
+        notes, pedal = _events_to_arrays(d['est_note_events'], d['est_pedal_events'])
+        if keep_output:
+            return notes, pedal, {k: np.asarray(d['output_dict'][k], np.float32) for k in OUTPUT_KEYS}
         return notes, pedal
+
+
+FPS = 100  # フレームごとの出力の時間解像度
+OUTPUT_KEYS = ['reg_onset_output', 'reg_offset_output', 'frame_output', 'velocity_output',
+               'reg_pedal_onset_output', 'reg_pedal_offset_output', 'pedal_frame_output']
+
+
+def _events_to_arrays(note_events, pedal_events):
+    notes = np.array(sorted((e['onset_time'], e['offset_time'], e['midi_note'], e['velocity'])
+                            for e in note_events)).reshape(-1, 4)
+    pedal = np.array(sorted((e['onset_time'], e['offset_time']) for e in pedal_events)).reshape(-1, 2)
+    return notes, pedal
+
+
+def events_from_output(output, onset_threshold=0.3, offset_threshold=0.3, frame_threshold=0.1):
+    """フレームごとの出力から、しきい値を変えて音符とペダルを取り出し直す(モデルの再計算は不要)。
+    しきい値を下げると、見落とされた弱い音の候補が得られる"""
+    from piano_transcription_inference.utilities import RegressionPostProcessor
+    pp = RegressionPostProcessor(FPS, classes_num=88, onset_threshold=onset_threshold, offset_threshold=offset_threshold,
+                                 frame_threshold=frame_threshold, pedal_offset_threshold=0.2)
+    note_events, pedal_events = pp.output_dict_to_midi_events({k: np.asarray(v, np.float32) for k, v in output.items()})
+    return _events_to_arrays(note_events, pedal_events)
