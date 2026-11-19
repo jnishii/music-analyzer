@@ -10,10 +10,6 @@
 import glob
 import os
 import re
-import struct
-import wave
-
-import numpy as np
 
 DEFAULT_DATA_DIR = os.path.expanduser('~/git/6-python/data/pedb2_v0.0.1.b')
 
@@ -25,6 +21,15 @@ def data_dir(arg=None):
 
 def list_performances(root):
     return sorted(os.path.basename(d) for d in glob.glob(os.path.join(root, '*-p[0-9]')) if os.path.isdir(d))
+
+
+def piece_of(perf):
+    """演奏名から曲名(例: moz-snt331-1-s-p1 -> moz-snt331-1)"""
+    return perf.rsplit('-', 2)[0]
+
+
+def player_of(perf):
+    return perf.rsplit('-', 1)[1]
 
 
 def perf_files(root, perf):
@@ -92,83 +97,3 @@ def load_match(path):
                          vel=int(c[4]), offvel=int(c[5]), status=int(c[7]), stime=int(c[8]),
                          note_id=c[9], err=int(c[10])))
     return perf, missing
-
-
-def load_wav(path):
-    """モノラル float32 と標本化周波数。16/24/32bit に対応"""
-    w = wave.open(path)
-    sw, nc, sr = w.getsampwidth(), w.getnchannels(), w.getframerate()
-    raw = w.readframes(w.getnframes())
-    if sw == 2:
-        x = np.frombuffer(raw, np.int16).astype(np.float32) / 32768
-    elif sw == 3:
-        b = np.frombuffer(raw, np.uint8).reshape(-1, 3).astype(np.int32)
-        x = b[:, 0] | (b[:, 1] << 8) | (b[:, 2] << 16)
-        x = np.where(x >= 1 << 23, x - (1 << 24), x).astype(np.float32) / 2 ** 23
-    else:
-        x = np.frombuffer(raw, np.int32).astype(np.float32) / 2 ** 31
-    return x.reshape(-1, nc).mean(1), sr
-
-
-def _vlq(b, i):
-    v = 0
-    while True:
-        c = b[i]
-        i += 1
-        v = (v << 7) | (c & 0x7f)
-        if c < 0x80:
-            return v, i
-
-
-def read_midi_notes(path):
-    """標準MIDIファイルから音符(発音秒, 離鍵秒, 音高, ベロシティ)の配列を返す。外部ライブラリ不要"""
-    b = open(path, 'rb').read()
-    assert b[:4] == b'MThd'
-    _, ntr, div = struct.unpack('>HHH', b[8:14])
-    i, events = 14, []
-    for _ in range(ntr):
-        L = struct.unpack('>I', b[i + 4:i + 8])[0]
-        d = b[i + 8:i + 8 + L]
-        i += 8 + L
-        j = tick = rs = 0
-        while j < len(d):
-            dt, j = _vlq(d, j)
-            tick += dt
-            s = d[j]
-            if s == 0xff:
-                ty = d[j + 1]
-                ln, j2 = _vlq(d, j + 2)
-                events.append((tick, 'meta', ty, d[j2:j2 + ln]))
-                j = j2 + ln
-                continue
-            if s in (0xf0, 0xf7):
-                ln, j2 = _vlq(d, j + 1)
-                j = j2 + ln
-                continue
-            if s & 0x80:
-                rs = s
-                j += 1
-            n = 1 if (rs & 0xf0) in (0xc0, 0xd0) else 2
-            events.append((tick, 'ch', rs, tuple(d[j:j + n])))
-            j += n
-    events.sort(key=lambda e: e[0])
-    # テンポ変化を考慮して tick -> 秒
-    tempo, last_tick, last_sec = 500000, 0, 0.0
-    sec_of = []
-    for e in events:
-        last_sec += (e[0] - last_tick) * tempo / div / 1e6
-        last_tick = e[0]
-        sec_of.append(last_sec)
-        if e[1] == 'meta' and e[2] == 0x51:
-            tempo = int.from_bytes(e[3], 'big')
-    on, notes = {}, []
-    for e, t in zip(events, sec_of):
-        if e[1] != 'ch' or (e[2] & 0xf0) not in (0x80, 0x90):
-            continue
-        key = (e[2] & 0x0f, e[3][0])
-        if (e[2] & 0xf0) == 0x90 and e[3][1] > 0:
-            on.setdefault(key, []).append((t, e[3][1]))
-        elif on.get(key):
-            t0, v = on[key].pop(0)
-            notes.append((t0, t, e[3][0], v))
-    return np.array(sorted(notes))

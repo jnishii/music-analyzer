@@ -9,3 +9,8 @@ __pycache__/
 *.pyc
 .venv/
 .DS_Store
+
+# 採譜モデルの重み
+models/
+*.pth
+*.egg-info/

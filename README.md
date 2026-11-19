@@ -5,17 +5,44 @@
 
 ## 構成
 
+将来リポジトリを分けられるように、役割ごとに4つのパッケージに分けている。
+
 ```
-music_analysis/
-  pedb.py          PEDB の読み込み(fmt3x, match, WAV, MIDI)。MIDIの読み込みは外部ライブラリ不要
-  note_table.py    音符1つを1行とする表(局所テンポ、タイミングのずれ、ベロシティ など)
-  transcribe.py    録音+楽譜 -> 発音時刻とベロシティの推定(楽譜情報つき、学習済みモデルなし)、MIDI書き出し
+src/
+  music_io/              共通の入出力(どの部分からも使う。他のパッケージに依存しない)
+    midi.py              MIDIの読み書き(音符・ダンパーペダル)。外部ライブラリ不要
+    audio.py             WAVの読み込み、標本化周波数の変換
+    pedb.py              PEDB の読み込み(fmt3x, match, 演奏名 -> 曲名)
+  piano_transcribe/      録音 -> 演奏MIDI                      依存: music_io
+    kong.py              高解像度ピアノ採譜モデル(Kong ら)。torch が必要
+    guided.py            楽譜情報つきの推定(学習済みモデルなし)、下書きの音の楽譜への割り当て
+    evaluate.py          推定と正解の比較(音符単位のF1、発音誤差、ベロシティ、ペダル)
+  score_analysis/        楽譜の分析                            依存: music_io
+    melody.py            旋律の判定(暫定: 上段の最高音)
+  performance_analysis/  楽譜と演奏MIDIの対比                  依存: music_io, score_analysis
+    note_table.py        音符1つを1行とする表(局所テンポ、タイミングのずれ、ベロシティ など)
 scripts/
-  make_note_tables.py    全演奏の表を作る
-  eval_transcription.py  録音からの推定を同時記録MIDIと比べて評価する
-  transcribe_to_midi.py  録音からMIDIを作る
-  plot_tempo.py          テンポ・強さの図
+  transcribe/            eval_transcription.py, transcribe_to_midi.py
+  performance/           make_note_tables.py, plot_tempo.py
+tests/
+  test_dependencies.py   上の依存の向きが守られているかの検査
 ```
+
+採譜と演奏分析のあいだは、コードではなく MIDI ファイルで受け渡す。
+分けるときは music_io を小さな共通パッケージとして切り出し、各リポジトリがそれに依存する形にする。
+
+## 準備
+
+```sh
+python3 -m venv .venv
+.venv/bin/pip install -e '.[transcribe,analysis,dev]'    # requirements.txt と同じ
+# 採譜モデルの重み(約170MB、git の管理外)
+mkdir -p models
+curl -L -o "models/CRNN_note_F1=0.9677_pedal_F1=0.9186.pth" \
+  "https://zenodo.org/record/4034264/files/CRNN_note_F1%3D0.9677_pedal_F1%3D0.9186.pth?download=1"
+```
+
+重みの場所は環境変数 `KONG_CHECKPOINT` でも指定できる。torch を使わない部分(guided、演奏分析)は numpy だけで動く。
 
 ## データ
 
@@ -30,12 +57,16 @@ scripts/
 ## 使い方
 
 ```sh
-pip install -r requirements.txt
+# 録音 -> MIDI
+python3 scripts/transcribe/transcribe_to_midi.py --method kong --wav 録音.wav --out 推定.mid
+python3 scripts/transcribe/transcribe_to_midi.py --method hybrid --perf bac-inv001-o-p1 --out output/bac-inv001-o-p1.est.mid
+python3 scripts/transcribe/eval_transcription.py            # 3方式の比較 -> output/transcription/
 
-python3 scripts/make_note_tables.py                     # -> output/note_tables/
-python3 scripts/plot_tempo.py bac-inv001-o-p1 bac-inv001-s-p1 bac-inv001-o-p2 bac-inv001-s-p2
-python3 scripts/eval_transcription.py                   # -> output/eval/ (既定の8演奏)
-python3 scripts/transcribe_to_midi.py --perf bac-inv001-o-p1 --out output/bac-inv001-o-p1.est.mid
+# 楽譜と演奏の対比
+python3 scripts/performance/make_note_tables.py             # -> output/note_tables/
+python3 scripts/performance/plot_tempo.py bac-inv001-o-p1 bac-inv001-s-p1 bac-inv001-o-p2 bac-inv001-s-p2
+
+python3 -m pytest tests
 ```
 
 ## PEDB のファイルについて
@@ -46,16 +77,29 @@ python3 scripts/transcribe_to_midi.py --perf bac-inv001-o-p1 --out output/bac-in
 - `*_fmt3x.txt`: `//TPQN` が四分音符あたりの tick 数。`//DuplicateOnsets` は2声部が共有する音(演奏は1回)。
 - 録音(WAV)は同時記録MIDIより約30〜60ms早い一定のずれがある(時計の進みの違いは見られない)。
 
-## これまでの評価（2026-11、8演奏）
+## 採譜の評価
 
-録音からの推定 vs 同時記録MIDI（`scripts/eval_transcription.py`）
+`scripts/transcribe/eval_transcription.py`、PEDB 全100演奏、正解は同時記録MIDI(2026-11-19)。
+guided の調整に使った8演奏(DEV)を除いた92演奏(TEST)の値。発音時刻は方式ごと・演奏ごとの一定のずれを差し引いた後。
 
-- 発音時刻: 誤差の中央値 約10ms。テンポの安定した曲は 4〜8ms、ルバートの大きい曲は DTW が部分的に外れる。
-- 和音内の時間差(数十ms)はほぼ再現できない。
-- ベロシティ: 相関 約0.65、平均絶対誤差 約9。
+| | guided | kong | hybrid |
+|---|---|---|---|
+| 音符F1(発音±50ms) | 0.68 | **0.96** | 0.85 |
+| 適合率 / 再現率 | 0.67 / 0.69 | 0.95 / 0.96 | 0.74 / 0.98 |
+| 発音+離鍵F1(正解をペダルで伸ばした音の終わり) | 0.25 | **0.79** | 0.70 |
+| 一致した音の発音誤差の中央値 | 8.2ms | **1.9ms** | 1.9ms |
+| 楽譜の音符単位の発音誤差 中央値 / ≤10ms | 14.9ms / 38% | - | 3.6ms / 65% |
+| 楽譜の音符単位のベロシティ 相関 / 平均絶対誤差 | 0.56 / 10.4 | - | 0.70 / 8.4 |
+| ベロシティ(一致した音) 相関 / 線形補正後の平均絶対誤差 | - | 0.88 / 6.0 | - |
+| ペダル(10msごとの一致)F1 | - | 0.88 | - |
 
-## 今後
-
-- 学習済みの採譜モデル(高解像度ピアノ採譜など)を組み込み、同じ評価で比較する
-- 楽譜の分析(和声機能、終止、フレーズ)の列を表に加える
-- 楽譜と演奏MIDIの対応付けを自作し、matchファイルの正解で評価する
+- kong: 楽譜を使わずに、どの演奏でも F1 0.86 以上。発音時刻はほぼ 2ms 以内。
+  ベロシティは相関が高いが絶対値がずれる(補正なしの平均絶対誤差 15)。線形補正(1曲抜き交差検証)で 6 程度
+- 離鍵: MIDI の note-off は鍵を離した時刻だが、kong は音が止んだ時刻(ペダルで伸びた音の終わり)を推定する。
+  鍵を離した時刻で比べると F1 0.22 にとどまる。アーティキュレーションの分析にはこの違いに注意
+- guided: 調整に使った8演奏(中央値 10.4ms)より、それ以外(14.9ms)で悪い。
+  11演奏で DTW が全体として外れ、秒単位でずれる(ラフマニノフ、ベートーヴェン Op.13-1、ショパン ワルツ7番など)
+- hybrid: kong の音を guided の予測時刻 ±150ms で楽譜の音符に割り当てる。割り当てられれば誤差は kong 並みだが、
+  guided が外れた箇所では割り当てに失敗し、その誤りを引き継ぐ(割り当てられた割合 76%)。
+  そのため「割り当てられない = 抜けた音」とみなす検出は使えない(適合率 0.12)。
+  楽譜との対応付けは、録音のクロマではなく kong の MIDI と楽譜を直接対応付けるほうがよい(次の作業)

@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "music-analysis"
+version = "0.1.0"
+description = "楽譜と演奏の分析(採譜・楽譜分析・演奏と楽譜の対比)"
+requires-python = ">=3.10"
+dependencies = ["numpy"]
+
+[project.optional-dependencies]
+# 採譜モデル(Kong ら)を使うとき
+transcribe = ["torch", "piano_transcription_inference"]
+# 演奏分析の図
+analysis = ["pandas", "matplotlib"]
+dev = ["pytest"]
+
+[tool.setuptools.packages.find]
+where = ["src"]

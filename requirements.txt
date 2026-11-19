@@ -1,3 +1,2 @@
-numpy
-pandas
-matplotlib
+# pip install -e '.[transcribe,analysis,dev]' と同じ
+-e .[transcribe,analysis,dev]

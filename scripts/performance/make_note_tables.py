@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """全演奏について「音符1つを1行とする表」を作る
 
-使い方: python3 scripts/make_note_tables.py [--data PEDBのフォルダ] [--out 出力フォルダ] [--half 4]
+使い方: python3 scripts/performance/make_note_tables.py [--data PEDBのフォルダ] [--out 出力フォルダ] [--half 4]
 出力: <out>/notes/<演奏名>.csv, <out>/all_notes.csv, <out>/summary.csv
 """
 import argparse
@@ -9,8 +9,9 @@ import csv
 import os
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from music_analysis import pedb, note_table as nt  # noqa: E402
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'src'))
+from music_io import pedb  # noqa: E402
+from performance_analysis import note_table as nt  # noqa: E402
 
 ap = argparse.ArgumentParser()
 ap.add_argument('--data', help='PEDBのフォルダ(既定: 環境変数 PEDB_DIR か ~/git/6-python/data/pedb2_v0.0.1.b)')

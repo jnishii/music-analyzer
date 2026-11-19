@@ -1,20 +1,20 @@
 """録音 + 楽譜 -> 各音の発音時刻とベロシティの推定(楽譜情報つき、学習済みモデルなし)
 
+楽譜は {音符ID: dict(stime, dur_ticks, pitch)} と TPQN(四分音符あたりの tick 数)で受け取る
+(music_io.pedb.load_fmt3x の形)。楽譜の分析コードには依存しない。
+
 手順
  1. 楽譜(fmt3x)の音符を仮のテンポで並べたクロマ列と、録音のクロマ列を DTW で大まかに対応付ける
  2. 各音の予測時刻の前後 ±150ms で、その音高の倍音成分の立ち上がり(スペクトルフラックス)の山を探す
  3. 立ち上がり直後の倍音エネルギーを特徴量として、ベロシティを線形回帰で推定する
-    (回帰の係数は scripts/eval_transcription.py が同時記録MIDIから学習して保存する)
+    (回帰の係数は scripts/transcribe/eval_transcription.py が同時記録MIDIから学習して保存する)
 
 2026-11 の8演奏での評価: 発音時刻の誤差の中央値 約10ms(テンポの安定した曲では 4〜8ms)、
 ベロシティの相関 約0.65。ルバートの大きい曲では DTW が部分的に外れる。
 """
 import json
-import struct
 
 import numpy as np
-
-from . import pedb
 
 SR = 44100
 N = 4096       # 窓長(約93ms)
@@ -79,10 +79,9 @@ def dtw(cost, pen=0.3):
     return np.array(path[::-1])
 
 
-def estimate(wav_path, fmt3x_path):
-    """楽譜の音符ごとに推定値を返す: {音符ID: dict(t_dtw, t_est, f_peak, f_rise, pitch, dur_sec)}"""
-    tpqn, score, _ = pedb.load_fmt3x(fmt3x_path)
-    x, sr = pedb.load_wav(wav_path)
+def estimate(x, sr, tpqn, score):
+    """楽譜の音符ごとに推定値を返す: {音符ID: dict(t_dtw, t_est, f_peak, f_rise, pitch, dur_sec)}
+    x: モノラルの録音, sr: 標本化周波数, tpqn と score は楽譜(上の説明)"""
     if sr != SR:
         raise ValueError(f'標本化周波数 {sr} には未対応(44100Hz のみ)')
     E = pitch_energy(x)
@@ -170,30 +169,37 @@ def load_model(path):
     return np.array(json.load(open(path))['velocity_beta'])
 
 
-# --- MIDI 書き出し
-def write_midi(path, notes, tpq=480, bpm=120):
-    """notes: (発音秒, 離鍵秒, 音高, ベロシティ) の並び。形式0・1トラック"""
-    us = int(60e6 / bpm)
-    tick = lambda s: int(round(s * 1e6 / us * tpq))
-    ev = []
-    for on, off, p, v in notes:
-        ev.append((tick(on), 1, 0x90, int(p), int(v)))
-        ev.append((tick(max(off, on + 0.02)), 0, 0x80, int(p), 64))
-    ev.sort()
+# --- 採譜モデルの下書きとの組み合わせ
+def assign_draft(est, draft, window=0.15):
+    """楽譜の音符ごとの推定(estimate の戻り値)に、採譜モデルの下書きの音を1対1で割り当てる
 
-    def vlq(v):
-        b = [v & 0x7f]
-        v >>= 7
-        while v:
-            b.append((v & 0x7f) | 0x80)
-            v >>= 7
-        return bytes(reversed(b))
-    data = bytearray(b'\x00\xff\x51\x03' + us.to_bytes(3, 'big'))
-    last = 0
-    for t, _, st, p, v in ev:
-        data += vlq(t - last) + bytes([st, p, v])
-        last = t
-    data += b'\x00\xff\x2f\x00'
-    with open(path, 'wb') as f:
-        f.write(b'MThd' + struct.pack('>IHHH', 6, 0, 1, tpq))
-        f.write(b'MTrk' + struct.pack('>I', len(data)) + data)
+    draft: (発音秒, 離鍵秒, 音高, ベロシティ) の配列(例: kong.Transcriber の出力)
+    同じ音高で t_est から ±window 秒以内の音を候補とし、近い組から順に決める。
+    両者の一定のずれ(方式ごとの遅れの違い)は先に差し引く。
+    戻り値: ({音符ID: 下書きの行番号}, 下書きと t_est の一定のずれ(秒))
+    """
+    draft = np.asarray(draft).reshape(-1, 4)
+    ids = list(est)
+    t = np.array([est[i]['t_est'] for i in ids])
+    p = np.array([est[i]['pitch'] for i in ids])
+    d = []
+    for k in range(len(ids)):
+        c = draft[draft[:, 2] == p[k], 0]
+        if len(c):
+            j = np.argmin(np.abs(c - t[k]))
+            if abs(c[j] - t[k]) <= window:
+                d.append(c[j] - t[k])
+    shift = float(np.median(d)) if d else 0.0
+    cand = []
+    for k in range(len(ids)):
+        for j in np.where(draft[:, 2] == p[k])[0]:
+            dist = abs(draft[j, 0] - shift - t[k])
+            if dist <= window:
+                cand.append((dist, k, j))
+    used_k, used_j, out = set(), set(), {}
+    for _, k, j in sorted(cand):
+        if k not in used_k and j not in used_j:
+            used_k.add(k)
+            used_j.add(j)
+            out[ids[k]] = int(j)
+    return out, shift

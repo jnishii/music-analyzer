@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """音符ごとの表から、局所テンポの比較図と、1演奏の強さ・タイミングの図を描く
 
-使い方: python3 scripts/plot_tempo.py [--tables output/note_tables] [--beats-per-bar 4] 演奏名 [演奏名 ...]
+使い方: python3 scripts/performance/plot_tempo.py [--tables output/note_tables] [--beats-per-bar 4] 演奏名 [演奏名 ...]
   図は <tables>/plots/ に保存する。2枚目の詳細図は先頭の演奏について描く。
 依存: pandas, matplotlib
 """

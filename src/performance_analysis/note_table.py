@@ -6,7 +6,8 @@ import csv
 
 import numpy as np
 
-from . import pedb
+from music_io import pedb
+from score_analysis import melody
 
 COLS = ['performance', 'note_id', 'bar', 'beat', 'staff', 'voice', 'pitch', 'pitch_name', 'dur_beats', 'ornament',
         'melody', 'status', 'n_perf_notes', 'onset', 'offset', 'velocity', 'velocity_z', 'local_tempo_bpm',
@@ -63,11 +64,7 @@ def analyze(root, perf, half_beats=4.0):
     vel_all = np.array([p['vel'] for p in match if p['note_id'] != '*'], float)
     vmu, vsd = vel_all.mean(), vel_all.std() or 1.0
 
-    # 旋律(暫定): 上段(staff 1)で各拍位置の最高音
-    top = {}
-    for n in score.values():
-        if n['staff'] == 1 and n['pitch'] is not None:
-            top[n['stime']] = max(top.get(n['stime'], -1), n['pitch'])
+    mel = melody.top_voice(score)
 
     rows = []
     for nid, n in sorted(score.items(), key=lambda kv: (kv[1]['stime'], kv[1]['pitch'] or 0)):
@@ -82,7 +79,7 @@ def analyze(root, perf, half_beats=4.0):
         r = dict(performance=perf, note_id=nid, bar=n['bar'], beat=s / tpqn, staff=n['staff'],
                  voice=n['voice'], pitch=n['pitch'], pitch_name=n['pitch_name'],
                  dur_beats=n['dur_ticks'] / tpqn, ornament=n['ornament'],
-                 melody=int(n['staff'] == 1 and n['pitch'] == top.get(s)),
+                 melody=int(nid in mel),
                  status=status, n_perf_notes=len(ps))
         if ps:
             main = [p for p in ps if p['status'] == 0] or ps
