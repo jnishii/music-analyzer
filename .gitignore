@@ -1,0 +1,11 @@
+# 出力・データ
+output/
+data/
+*.wav
+*.mid
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.DS_Store
