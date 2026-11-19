@@ -22,7 +22,9 @@ src/
   performance_analysis/  楽譜と演奏MIDIの対比                  依存: music_io, score_analysis
     note_table.py        音符1つを1行とする表(局所テンポ、タイミングのずれ、ベロシティ など)
 scripts/
-  transcribe/            eval_transcription.py, transcribe_to_midi.py
+  transcribe/            eval_transcription.py, report_kong.py, transcribe_to_midi.py
+docs/
+  kong_evaluation.md     採譜モデルの詳しい評価(打鍵・離鍵・ベロシティ・ペダル)と改善の検討
   performance/           make_note_tables.py, plot_tempo.py
 tests/
   test_dependencies.py   上の依存の向きが守られているかの検査
@@ -61,6 +63,7 @@ curl -L -o "models/CRNN_note_F1=0.9677_pedal_F1=0.9186.pth" \
 python3 scripts/transcribe/transcribe_to_midi.py --method kong --wav 録音.wav --out 推定.mid
 python3 scripts/transcribe/transcribe_to_midi.py --method hybrid --perf bac-inv001-o-p1 --out output/bac-inv001-o-p1.est.mid
 python3 scripts/transcribe/eval_transcription.py            # 3方式の比較 -> output/transcription/
+python3 scripts/transcribe/report_kong.py                   # Kong の詳しい評価 -> output/transcription/kong_report/
 
 # 楽譜と演奏の対比
 python3 scripts/performance/make_note_tables.py             # -> output/note_tables/
@@ -78,6 +81,8 @@ python3 -m pytest tests
 - 録音(WAV)は同時記録MIDIより約30〜60ms早い一定のずれがある(時計の進みの違いは見られない)。
 
 ## 採譜の評価
+
+Kong の詳しい評価と改善の検討は [docs/kong_evaluation.md](docs/kong_evaluation.md)。
 
 `scripts/transcribe/eval_transcription.py`、PEDB 全100演奏、正解は同時記録MIDI(2026-11-19)。
 guided の調整に使った8演奏(DEV)を除いた92演奏(TEST)の値。発音時刻は方式ごと・演奏ごとの一定のずれを差し引いた後。
