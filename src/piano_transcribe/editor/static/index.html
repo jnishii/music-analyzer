@@ -13,11 +13,17 @@
     <button id="btn-open-project">開く</button>
   </div>
   <div class="group">
-    <input id="wav-path" type="text" placeholder="録音(WAV)のパス 例: ~/rec/take1.wav" size="34">
+    <input id="wav-path" type="text" placeholder="録音(WAV)のパス" size="24">
+    <input id="score-path-new" type="text" placeholder="楽譜(MusicXML)のパス(任意)" size="22">
     <button id="btn-open-path">読み込む</button>
   </div>
   <div class="group">
     <label class="file-btn">WAV を選ぶ<input id="wav-file" type="file" accept=".wav,audio/wav"></label>
+  </div>
+  <div class="group" id="score-group" title="開いているプロジェクトに楽譜を指定する">
+    <input id="score-path" type="text" placeholder="楽譜(MusicXML)のパス" size="20">
+    <button id="btn-score-path">楽譜を指定</button>
+    <label class="file-btn">MusicXML を選ぶ<input id="score-file" type="file" accept=".xml,.musicxml"></label>
   </div>
   <div id="proj-name"></div>
 </header>
@@ -35,11 +41,21 @@
     <button id="btn-zoom-out" title="Ctrl/⌘ + ホイール でも拡大縮小">－</button>
     <button id="btn-zoom-in">＋</button>
   </div>
+  <label>波形の縦
+    <select id="wave-gain"><option value="1">×1</option><option value="4" selected>×4</option><option value="16">×16</option></select>
+  </label>
   <label><input id="show-roll" type="checkbox" checked>モデルの出力</label>
   <label><input id="show-cand" type="checkbox">見落としの候補</label>
   <div class="group">
     <button id="btn-refine-sel" title="R">選択した音を再調整</button>
     <button id="btn-refine-all" title="Shift+R">修正した音をすべて再調整</button>
+  </div>
+  <div class="group">
+    <button id="btn-compare" title="楽譜と照合して違いを出し直す">楽譜と照合</button>
+    <label title="編集のたびに少し待ってから照合し直す"><input id="auto-compare" type="checkbox" checked>編集のたびに照合</label>
+    <label>楽譜の段
+      <select id="score-height"><option value="0">隠す</option><option value="34" selected>小</option><option value="50">大</option></select>
+    </label>
   </div>
   <div class="group">
     <button id="btn-undo" title="⌘/Ctrl+Z">元に戻す</button>
@@ -48,14 +64,37 @@
   <div class="group">
     <button id="btn-save" class="primary" title="⌘/Ctrl+S">保存</button>
     <a id="link-midi" href="#" class="disabled">MIDI をダウンロード</a>
-    <a id="link-score" href="#" class="disabled" target="_blank"
-       title="楽譜と比べる画面(scripts/performance/score_viewer.py を起動しておく)で、保存した MIDI を元の楽譜と比べる">楽譜と比べる</a>
   </div>
 </div>
 
 <main>
-  <div id="roll-wrap"><canvas id="roll"></canvas></div>
-  <aside>
+  <aside id="diff-aside">
+    <h2>楽譜との違い</h2>
+    <div id="diff-empty" class="note">楽譜を指定すると、楽譜と照合した違いと補正の提案がここに出ます。</div>
+    <div id="diff-tools" hidden>
+      <div id="diff-summary"></div>
+      <div class="filters" id="diff-kinds"></div>
+      <div class="filters">
+        <select id="diff-status">
+          <option value="todo">未判定</option><option value="all">すべて</option><option value="done">判定済み</option>
+        </select>
+        <select id="diff-sort">
+          <option value="measure">小節順</option><option value="doubt">確認が必要な順</option>
+        </select>
+      </div>
+      <button id="btn-apply-shown" title="一覧に出ている未判定の提案をまとめて当てはめる">表示中の提案をまとめて当てはめる</button>
+    </div>
+    <div id="diff-detail" hidden></div>
+    <ol id="diff-list"></ol>
+  </aside>
+  <div id="center">
+    <div id="roll-wrap"><canvas id="roll"></canvas></div>
+    <div id="score-panel" hidden>
+      <section class="pane"><h3>元の楽譜</h3><div class="sheet" id="sheet-orig"></div></section>
+      <section class="pane"><h3>MIDI から書き起こした楽譜</h3><div class="sheet" id="sheet-perf"></div></section>
+    </div>
+  </div>
+  <aside id="info-aside">
     <section>
       <h2>選択した音</h2>
       <dl id="sel-info"><dt>なし</dt></dl>
@@ -70,17 +109,21 @@
       <ul class="legend">
         <li><span class="sw model"></span>モデルの出力のまま</li>
         <li><span class="sw user"></span>人が追加・修正した音</li>
+        <li><span class="sw score"></span>楽譜の提案で足した音</li>
         <li><span class="sw cand"></span>受け入れた候補</li>
         <li><span class="sw candidate"></span>見落としの候補(未確認)</li>
-        <li><span class="sw weak"></span>再調整で録音に手がかりがなかった音</li>
+        <li><span class="sw ghost"></span>選んだ違いの提案(まだ足していない)</li>
+        <li><span class="sw weak"></span>録音に手がかりがなかった音</li>
       </ul>
-      <p class="note">濃さはベロシティ。背景の青はモデルが「鳴っている」と判断した度合い。</p>
+      <p class="note">濃さはベロシティ。背景の青はモデルが「鳴っている」と判断した度合い。上の帯は録音の波形。</p>
     </section>
     <section>
       <h2>操作</h2>
       <ul class="keys">
-        <li><kbd>スペース</kbd> 再生 / 停止(上の目盛りをクリックした位置から)</li>
-        <li><kbd>P</kbd> 選択した音の前後を再生</li>
+        <li><kbd>スペース</kbd> 再生 / 停止(目盛りか波形をクリックした位置から)</li>
+        <li><kbd>P</kbd> 選択した音(違い)の前後を再生</li>
+        <li><kbd>J</kbd> / <kbd>K</kbd> 次 / 前の違い</li>
+        <li><kbd>A</kbd> 提案を当てはめる / <kbd>O</kbd> 演奏どおり / <kbd>U</kbd> 不明</li>
         <li>クリック 選択 / <kbd>Shift</kbd>+クリック 追加選択 / 空いた所をドラッグ 範囲選択</li>
         <li>ドラッグ 移動(上下で音高) / 右端をドラッグ 長さ</li>
         <li>空いた所をダブルクリック 音を追加</li>
@@ -88,6 +131,7 @@
         <li><kbd>Delete</kbd> 削除(候補なら却下)</li>
         <li><kbd>↑</kbd><kbd>↓</kbd> 音高 ±1(<kbd>Shift</kbd> で ±12) / <kbd>←</kbd><kbd>→</kbd> 時刻 ±10ms</li>
         <li><kbd>R</kbd> 選択した音を再調整 / <kbd>Shift</kbd>+<kbd>R</kbd> 修正した音をすべて</li>
+        <li>楽譜の小節をクリック その時刻へ移る</li>
         <li>ホイール 上下 / <kbd>Shift</kbd>+ホイール 左右 / <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+ホイール 拡大縮小</li>
         <li>左の鍵盤をクリック その音を鳴らす</li>
       </ul>

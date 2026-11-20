@@ -2,6 +2,9 @@
 
 流れ: 録音(WAV)を読み込む -> 採譜モデルで MIDI を作る -> 録音と MIDI を再生して確かめる ->
       ピアノロールで間違いを直す -> 直した音を録音に合わせて詰め直す(refine.py) -> MIDI に保存
+楽譜(MusicXML)を指定すると、楽譜と照合して違いと補正の提案を出し(score.py)、元の楽譜と
+MIDI から書き起こした楽譜を並べて表示する。違いごとの判定は project.json に残る。
+楽譜の機能には music21 と verovio が必要(なければ楽譜なしで動く)。
 
 起動: python3 scripts/transcribe/editor.py [--port 8765] [--projects output/editor]
       ブラウザで http://127.0.0.1:8765/ を開く
@@ -9,10 +12,12 @@
 作業の単位は「プロジェクト」(<projects>/<名前>/)。中身:
   audio.wav     録音の複製
   model.npz     採譜モデルの結果(音符・ペダル・見落としの候補・フレームごとの出力)
-  project.json  修正後の音符・ペダル・削除した音・保存時刻
+  score.xml     楽譜(MusicXML の複製。指定したときだけ)
+  project.json  修正後の音符・ペダル・削除した音・違いごとの判定・保存時刻
   <名前>.mid    保存した MIDI
 標準ライブラリの http.server だけで動く。外部に公開しない(127.0.0.1 で待ち受ける)前提。
 """
+import concurrent.futures
 import contextlib
 import io
 import json
@@ -50,6 +55,8 @@ class Store:
         self.lock = threading.Lock()
         self.transcriber = None
         self.outputs = {}  # 名前 -> フレームごとの出力(最近使った2つ)
+        # verovio は最初に使ったスレッドでしか正しく動かないので、楽譜の描画は1本のスレッドで行う
+        self.render_thread = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 
     def path(self, name, *parts):
         name = safe_name(name)
@@ -156,6 +163,47 @@ class Store:
         pj = self.path(name, 'project.json')
         if os.path.exists(pj):
             res['saved'] = json.load(open(pj, encoding='utf-8'))
+        sx = self.path(name, 'score.xml')
+        res['score'] = os.path.exists(sx)
+        if res['score'] and os.path.exists(sx + '.name'):
+            res['score_name'] = open(sx + '.name', encoding='utf-8').read().strip()
+        return res
+
+    def set_score(self, name, data=None, path=None, label=None):
+        """楽譜(MusicXML)をプロジェクトに登録する。読めるかを先に確かめる"""
+        from music_io import musicxml
+        if path is not None:
+            path = os.path.expanduser(path)
+            if not os.path.isfile(path):
+                raise ValueError(f'楽譜のファイルがありません: {path}')
+            data = open(path, 'rb').read()
+        if data and data[:2] == b'PK':
+            raise ValueError('圧縮された MusicXML(.mxl)には未対応です。非圧縮の .musicxml / .xml を使ってください')
+        dst = self.path(name, 'score.xml')
+        tmp = dst + '.tmp'
+        with open(tmp, 'wb') as f:
+            f.write(data)
+        try:
+            _, notes, _, measures = musicxml.read(tmp)
+        except Exception as e:
+            os.remove(tmp)
+            raise ValueError(f'MusicXML として読めません: {e}')
+        os.replace(tmp, dst)
+        with open(dst + '.name', 'w', encoding='utf-8') as f:
+            f.write(label or os.path.basename(path or 'score.xml'))
+        return dict(notes=len(notes), measures=len(measures))
+
+    def compare(self, name, notes):
+        """楽譜と照合して、違い・提案・小節の時刻・楽譜2つの SVG を返す"""
+        from alignment import notation
+        from piano_transcribe.editor import score
+        xml = self.path(name, 'score.xml')
+        if not os.path.exists(xml):
+            raise ValueError('楽譜が指定されていません')
+        t0 = time.time()
+        res = score.analyze(xml, notes, self.output(name))
+        svgs = self.render_thread.submit(notation.render_svgs, [res.pop('original_xml'), res.pop('performance_xml')]).result()
+        res.update(original_svg=svgs[0], performance_svg=svgs[1], seconds=round(time.time() - t0, 2))
         return res
 
     def save(self, name, body):
@@ -253,10 +301,21 @@ def make_handler(store):
                     path = os.path.expanduser(body['path'])
                     if not os.path.isfile(path):
                         return self._send(400, {'error': f'ファイルがありません: {path}'})
-                    return self._send(200, {'name': store.create(body.get('name') or path, wav_src=path)})
+                    name = store.create(body.get('name') or path, wav_src=path)
+                    if body.get('score'):
+                        store.set_score(name, path=body['score'])
+                    return self._send(200, {'name': name})
+                if len(parts) == 4 and parts[1] == 'projects' and parts[3] == 'score':
+                    raw = self._body()
+                    if raw[:1] == b'{':
+                        b = json.loads(raw)
+                        return self._send(200, store.set_score(parts[2], path=b['path']))
+                    return self._send(200, store.set_score(parts[2], data=raw, label=q.get('name', [None])[0]))
                 if len(parts) == 4 and parts[1] == 'projects':
                     name, sub = parts[2], parts[3]
                     body = json.loads(self._body() or b'{}')
+                    if sub == 'compare':
+                        return self._send(200, store.compare(name, body['notes']))
                     if sub == 'refine':
                         res = refine.refine_notes(store.output(name), body['notes'], body['ids'])
                         return self._send(200, res)
@@ -265,6 +324,8 @@ def make_handler(store):
                 self._send(404, {'error': 'not found'})
             except ValueError as e:
                 self._send(400, {'error': str(e)})
+            except ImportError as e:
+                self._send(400, {'error': f'楽譜の機能には music21 と verovio が必要です(pip install -e .[score]): {e}'})
             except Exception as e:
                 traceback.print_exc()
                 self._send(500, {'error': f'{type(e).__name__}: {e}'})

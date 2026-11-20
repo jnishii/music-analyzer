@@ -5,7 +5,7 @@
 
 ## 構成
 
-将来リポジトリを分けられるように、役割ごとに4つのパッケージに分けている。
+将来リポジトリを分けられるように、役割ごとにパッケージを分けている。
 
 ```
 src/
@@ -14,21 +14,24 @@ src/
     audio.py             WAVの読み込み、標本化周波数の変換
     pedb.py              PEDB の読み込み(fmt3x, match, 演奏名 -> 曲名)
     musicxml.py          MusicXML の読み込み(fmt3x と同じ形。PEDB の全曲で fmt3x と照合済み)、音符に色を付けた書き出し
-  piano_transcribe/      録音 -> 演奏MIDI                      依存: music_io
+  alignment/             楽譜と演奏の対応付け(共通の土台)      依存: music_io
+    align.py             演奏の音と楽譜の音の対応付け(matchファイルと同じ形で出力)
+    notation.py          違い(抜け・余分・弾き間違い・リズム)と、演奏を楽譜に書き起こす。Verovio での描画
+  piano_transcribe/      録音 -> 演奏MIDI                      依存: music_io, alignment
     kong.py              高解像度ピアノ採譜モデル(Kong ら)。torch が必要
     refine.py            人が直した音を、録音(モデルのフレームごとの出力)に合わせて詰め直す
-    editor/              採譜の確認・修正用の GUI(ブラウザで開く。標準ライブラリのサーバー + HTML/JS)
+    velocity.py          倍音エネルギーによるベロシティ推定(方法 B。比較用)
+    editor/              採譜の確認・修正の統合 GUI(録音・MIDI・楽譜の照合と修正。ブラウザで開く)
     guided.py            楽譜情報つきの推定(学習済みモデルなし)、下書きの音の楽譜への割り当て
     evaluate.py          推定と正解の比較(音符単位のF1、発音誤差、ベロシティ、ペダル)
   score_analysis/        楽譜の分析                            依存: music_io
     melody.py            旋律の判定(暫定: 上段の最高音)
-  performance_analysis/  楽譜と演奏MIDIの対比                  依存: music_io, score_analysis
-    align.py             演奏MIDIと楽譜の対応付け(matchファイルと同じ形で出力)
-    notation.py          演奏を楽譜に書き起こし、元の楽譜との違い(抜け・余分・弾き間違い・リズム)を求める
+  performance_analysis/  楽譜と演奏MIDIの対比                  依存: music_io, score_analysis, alignment
     viewer/              元の楽譜と演奏から書き起こした楽譜を並べて表示する GUI
     note_table.py        音符1つを1行とする表(局所テンポ、タイミングのずれ、ベロシティ など)
 scripts/
-  transcribe/            editor.py, eval_transcription.py, report_kong.py, transcribe_to_midi.py
+  transcribe/            editor.py, eval_transcription.py, report_kong.py, transcribe_to_midi.py, save_kong_frames.py,
+                         eval_added_velocity.py, eval_refine_onset.py, eval_score_autofix.py
 docs/
   kong_evaluation.md     採譜モデルの詳しい評価(打鍵・離鍵・ベロシティ・ペダル)と改善の検討
   alignment_evaluation.md  演奏MIDIと楽譜の対応付けの評価、全自動の表と人手の表の比較
@@ -90,16 +93,29 @@ python3 -m pytest tests
 python3 scripts/transcribe/editor.py          # ブラウザで http://127.0.0.1:8765/ を開く
 ```
 
-1. 録音(WAV、PCM 16/24/32bit)のパスを入れて「読み込む」か、「WAV を選ぶ」。採譜モデルが MIDI を作る
-   (初回はモデルの読み込みに約1分、採譜は録音の長さの約1/3の時間)
+1. 録音(WAV、PCM 16/24/32bit)のパスと、あれば楽譜(MusicXML)のパスを入れて「読み込む」か、「WAV を選ぶ」。
+   採譜モデルが MIDI を作る(初回はモデルの読み込みに約1分、採譜は録音の長さの約1/3の時間)。
+   楽譜は後から「楽譜を指定」/「MusicXML を選ぶ」でも指定できる(非圧縮の .musicxml / .xml)
 2. スペースで再生。「録音 / MIDI / 両方」を切り替え、音量を調整して聴き比べる
 3. ピアノロールで直す: ダブルクリックで追加、Delete で削除、ドラッグで移動(上下で音高)、右端で長さ、↑↓ で音高。
    「見落としの候補」を表示すると、モデルがしきい値未満で落とした音を点線で示す(ダブルクリックで受け入れ)
 4. R(選択した音)/ Shift+R(修正した音すべて)で再調整: その音高・その時刻の近くで、録音に対するモデルの出力から
    発音時刻・ベロシティ・離鍵を決め直す。録音に手がかりがない音は赤い点線になり、指定した時刻のまま残る
-5. ⌘/Ctrl+S で保存。`output/editor/<名前>/` に project.json(修正の記録)と MIDI ができる
+5. 楽譜を指定していれば、楽譜と照合した違い(抜け・余分・弾き間違い・リズム)が左に並ぶ。違いを選ぶと、
+   ピアノロール・録音波形・元の楽譜・MIDI から書き起こした楽譜がその箇所に移る。違いごとに判定する:
+   提案を当てはめる(A: 採譜の誤りとして MIDI を直す)/ 演奏どおり(O)/ 不明(U)。J / K で次・前へ。
+   提案には録音の手がかりや検証での正しさが付く。自動では当てはめない(下の「楽譜を手がかりにした補正」)。
+   編集のたびに少し待ってから照合し直す。楽譜の小節をクリックするとその時刻へ移り、再生中は楽譜が追従する
+6. ⌘/Ctrl+S で保存。`output/editor/<名前>/` に project.json(修正・違いごとの判定の記録)と MIDI ができる
 
-再生の MIDI の音は簡単な合成音(確認用)。ペダルは表示のみで、編集はできない。
+再生の MIDI の音は簡単な合成音(確認用)。ペダルは表示のみで、編集はできない。楽譜の機能には music21 と verovio が必要。
+
+### 楽譜を手がかりにした補正を自動で当てはめない理由
+
+`scripts/transcribe/eval_score_autofix.py`(PEDB、採譜モデルの出力、調整に使っていない曲)での正しさ:
+楽譜にあって MIDI にない音を、録音の手がかり(発音の出力 0.1 以上)があるときに足す規則は 73%
+(弾かれていなかった音を補ってしまう)。楽譜にない音を消す規則は、倍音 91%・再検出 88%・その他 79%。
+どれも黙って直せる水準ではないので、根拠つきの提案として人が判定する。
 
 ## 楽譜と演奏の比較(GUI)
 

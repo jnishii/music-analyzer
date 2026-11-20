@@ -1,10 +1,11 @@
-// 採譜の確認・修正: ピアノロールの表示・編集、録音と MIDI の再生、再調整、保存
+// 採譜の確認・修正: ピアノロールと録音波形の表示・編集、録音と MIDI の再生、再調整、
+// 楽譜との照合(違いの一覧・補正の提案・判定、元の楽譜と書き起こした楽譜の表示)、保存
 'use strict';
 
 const $ = (id) => document.getElementById(id);
 const LO = 21, HI = 108;            // ピアノの音域
-const KEYW = 46, RULER = 22, PEDAL = 26;
-const COLOR = { model: '#2a78d6', user: '#eb6834', cand: '#1baf7a', muted: '#8a8983', weak: '#e34948',
+const KEYW = 46, RULER = 22, WAVE = 56, TOP = RULER + WAVE, PEDAL = 26;   // TOP より上が目盛りと波形の帯
+const COLOR = { model: '#2a78d6', user: '#eb6834', cand: '#1baf7a', score: '#6250d6', muted: '#8a8983', weak: '#e34948',
                 text: '#0b0b0b', text2: '#52514e', grid: '#e9e8e4', black: '#f1f0ec', surface: '#fcfcfb' };
 const NAMES = ['C', 'C#', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'G#', 'A', 'Bb', 'B'];
 const pitchName = (p) => NAMES[p % 12] + (Math.floor(p / 12) - 1);
@@ -19,6 +20,8 @@ const S = {
   undo: [], redo: [], dirty: false, nextId: 1,
   roll: null, audioBuf: null,
   showRoll: true, showCand: false,
+  // 楽譜との照合
+  score: false, diffs: [], judg: {}, measures: [], active: null, ghost: null, peaks: null,
 };
 
 const canvas = $('roll');
@@ -41,8 +44,8 @@ async function api(path, opts = {}) {
 // ---- 座標
 const xOf = (t) => KEYW + (t - S.view.t0) * S.view.pps;
 const tOf = (x) => S.view.t0 + (x - KEYW) / S.view.pps;
-const yOf = (p) => RULER + (HI - p) * S.view.rowH - S.view.y0;
-const pOf = (y) => Math.round(HI - (y + S.view.y0 - RULER) / S.view.rowH + 0.5);
+const yOf = (p) => TOP + (HI - p) * S.view.rowH - S.view.y0;
+const pOf = (y) => Math.round(HI - (y + S.view.y0 - TOP) / S.view.rowH + 0.5);
 const rollBottom = () => H - PEDAL;
 
 function resize() {
@@ -57,7 +60,7 @@ function resize() {
 
 function clampView() {
   const v = S.view;
-  const maxY = Math.max(0, (HI - LO + 1) * v.rowH - (rollBottom() - RULER));
+  const maxY = Math.max(0, (HI - LO + 1) * v.rowH - (rollBottom() - TOP));
   v.y0 = Math.min(Math.max(0, v.y0), maxY);
   v.t0 = Math.min(Math.max(-0.5, v.t0), Math.max(0, S.duration - 1));
 }
@@ -76,11 +79,11 @@ function render() {
   ctx2.fillStyle = COLOR.surface;
   ctx2.fillRect(0, 0, W, H);
   ctx2.save();
-  ctx2.beginPath(); ctx2.rect(KEYW, RULER, W - KEYW, rollBottom() - RULER); ctx2.clip();
+  ctx2.beginPath(); ctx2.rect(KEYW, TOP, W - KEYW, rollBottom() - TOP); ctx2.clip();
   // 黒鍵の行と C の線
   for (let p = LO; p <= HI; p++) {
     const y = yOf(p);
-    if (y > rollBottom() || y + v.rowH < RULER) continue;
+    if (y > rollBottom() || y + v.rowH < TOP) continue;
     if (isBlack(p)) { ctx2.fillStyle = COLOR.black; ctx2.fillRect(KEYW, y, W - KEYW, v.rowH); }
     if (p % 12 === 0) { ctx2.fillStyle = COLOR.grid; ctx2.fillRect(KEYW, y + v.rowH - 1, W - KEYW, 1); }
   }
@@ -102,7 +105,7 @@ function render() {
   for (const n of S.notes) {
     if (n.off < v.t0 || n.on > t1) continue;
     const x = xOf(n.on), w = Math.max(3, (n.off - n.on) * v.pps), y = yOf(n.pitch);
-    const c = n.src === 'cand' ? COLOR.cand : (n.src === 'user' || n.edited) ? COLOR.user : COLOR.model;
+    const c = n.src === 'cand' ? COLOR.cand : n.src === 'score' ? COLOR.score : (n.src === 'user' || n.edited) ? COLOR.user : COLOR.model;
     ctx2.globalAlpha = 0.3 + 0.7 * Math.min(1, n.vel / 110);
     ctx2.fillStyle = c;
     roundRect(x, y + 1, w, v.rowH - 2, 2); ctx2.fill();
@@ -116,6 +119,12 @@ function render() {
       roundRect(x, y + 1, w, v.rowH - 2, 2); ctx2.stroke();
     }
   }
+  // 選んだ違いの提案(まだ足していない音)
+  if (S.ghost) {
+    const n = S.ghost, x = xOf(n.on), w = Math.max(3, (n.off - n.on) * v.pps), y = yOf(n.pitch);
+    ctx2.setLineDash([4, 3]); ctx2.strokeStyle = COLOR.score; ctx2.lineWidth = 2;
+    ctx2.strokeRect(x + 0.5, y + 1.5, w - 1, v.rowH - 3); ctx2.setLineDash([]);
+  }
   // 範囲選択の枠
   if (drag && drag.mode === 'box' && drag.moved) {
     ctx2.strokeStyle = COLOR.text2; ctx2.setLineDash([4, 3]); ctx2.lineWidth = 1;
@@ -126,6 +135,7 @@ function render() {
   ctx2.restore();
   drawKeys();
   drawRuler();
+  drawWave();
   drawPedal();
   // 再生位置
   const xc = xOf(S.cursor);
@@ -151,7 +161,7 @@ const fmtTime = (t) => { const m = Math.floor(t / 60), s = t - 60 * m; return `$
 function drawTimeGrid() {
   const st = timeStep();
   ctx2.fillStyle = COLOR.grid;
-  for (let t = Math.ceil(S.view.t0 / st) * st; t < tOf(W); t += st) ctx2.fillRect(Math.round(xOf(t)), RULER, 1, rollBottom() - RULER);
+  for (let t = Math.ceil(S.view.t0 / st) * st; t < tOf(W); t += st) ctx2.fillRect(Math.round(xOf(t)), TOP, 1, rollBottom() - TOP);
 }
 
 function drawRuler() {
@@ -168,9 +178,9 @@ function drawRuler() {
 }
 
 function drawKeys() {
-  ctx2.fillStyle = '#fff'; ctx2.fillRect(0, RULER, KEYW, rollBottom() - RULER);
+  ctx2.fillStyle = '#fff'; ctx2.fillRect(0, TOP, KEYW, rollBottom() - TOP);
   ctx2.save();
-  ctx2.beginPath(); ctx2.rect(0, RULER, KEYW, rollBottom() - RULER); ctx2.clip();
+  ctx2.beginPath(); ctx2.rect(0, TOP, KEYW, rollBottom() - TOP); ctx2.clip();
   ctx2.font = '10px "Hiragino Sans", sans-serif'; ctx2.textBaseline = 'middle';
   for (let p = LO; p <= HI; p++) {
     const y = yOf(p);
@@ -181,8 +191,10 @@ function drawKeys() {
     }
   }
   ctx2.restore();
-  ctx2.fillStyle = COLOR.grid; ctx2.fillRect(KEYW - 1, RULER, 1, rollBottom() - RULER);
-  ctx2.fillStyle = '#fff'; ctx2.fillRect(0, 0, KEYW, RULER);
+  ctx2.fillStyle = COLOR.grid; ctx2.fillRect(KEYW - 1, TOP, 1, rollBottom() - TOP);
+  ctx2.fillStyle = '#fff'; ctx2.fillRect(0, 0, KEYW, TOP);
+  ctx2.fillStyle = COLOR.text2; ctx2.font = '10px "Hiragino Sans", sans-serif'; ctx2.textBaseline = 'middle';
+  ctx2.fillText('波形', 8, RULER + WAVE / 2);
 }
 
 function drawPedal() {
@@ -233,13 +245,17 @@ function drawRoll() {
 }
 
 // ---- 編集の履歴
-const snapshot = () => JSON.stringify({ notes: S.notes, candidates: S.candidates, deleted: S.deleted });
-function pushUndo() { S.undo.push(snapshot()); if (S.undo.length > 200) S.undo.shift(); S.redo = []; setDirty(true); }
+const snapshot = () => JSON.stringify({ notes: S.notes, candidates: S.candidates, deleted: S.deleted, judg: S.judg });
+// recompare: 音を変える操作なら楽譜との照合を予約する(判定だけの操作では不要)
+function pushUndo(recompare = true) {
+  S.undo.push(snapshot()); if (S.undo.length > 200) S.undo.shift(); S.redo = []; setDirty(true);
+  if (recompare) scheduleCompare();
+}
 function restore(js) {
   const o = JSON.parse(js);
-  S.notes = o.notes; S.candidates = o.candidates; S.deleted = o.deleted;
+  S.notes = o.notes; S.candidates = o.candidates; S.deleted = o.deleted; S.judg = o.judg || {};
   S.sel = new Set([...S.sel].filter((id) => S.notes.some((n) => n.id === id) || S.candidates.some((n) => n.id === id)));
-  setDirty(true); updatePanel(); draw();
+  setDirty(true); updatePanel(); renderDiffs(); scheduleCompare(); draw();
 }
 function undo() { if (S.undo.length) { S.redo.push(snapshot()); restore(S.undo.pop()); } }
 function redoAct() { if (S.redo.length) { S.undo.push(snapshot()); restore(S.redo.pop()); } }
@@ -263,13 +279,13 @@ canvas.addEventListener('mousedown', (e) => {
   canvas.focus();
   ensureAudio();
   const r = canvas.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
-  if (y < RULER && x > KEYW) {           // 目盛り: 再生位置
+  if (y < TOP && x > KEYW) {             // 目盛りと波形: 再生位置
     S.cursor = Math.max(0, tOf(x));
     if (player.playing) player.play(S.cursor); else draw();
     drag = { mode: 'cursor' };
     return;
   }
-  if (x < KEYW && y > RULER && y < rollBottom()) { player.preview(pOf(y), 70); return; }
+  if (x < KEYW && y > TOP && y < rollBottom()) { player.preview(pOf(y), 70); return; }
   if (y >= rollBottom()) return;
   const h = hit(x, y);
   if (h) {
@@ -290,7 +306,7 @@ canvas.addEventListener('mousedown', (e) => {
 window.addEventListener('mousemove', (e) => {
   const r = canvas.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
   if (!drag) {
-    const h = x > KEYW && y > RULER && y < rollBottom() ? hit(x, y) : null;
+    const h = x > KEYW && y > TOP && y < rollBottom() ? hit(x, y) : null;
     canvas.style.cursor = h && h.edge ? 'ew-resize' : h ? 'grab' : 'default';
     return;
   }
@@ -327,7 +343,7 @@ window.addEventListener('mouseup', () => { if (drag) { drag = null; updatePanel(
 
 canvas.addEventListener('dblclick', (e) => {
   const r = canvas.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
-  if (x < KEYW || y < RULER || y >= rollBottom()) return;
+  if (x < KEYW || y < TOP || y >= rollBottom()) return;
   const h = hit(x, y);
   if (h && h.cand) { acceptCandidates([h.n.id]); return; }
   if (h) return;
@@ -370,7 +386,12 @@ window.addEventListener('keydown', (e) => {
   if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); deleteSelected(); return; }
   if (e.key === 'Enter') { acceptCandidates([...S.sel].filter((id) => S.candidates.some((c) => c.id === id))); return; }
   if (e.key.toLowerCase() === 'r') { e.preventDefault(); e.shiftKey ? refineAll() : refineSelected(); return; }
-  if (e.key.toLowerCase() === 'p') { playAroundSelection(); return; }
+  if (e.key.toLowerCase() === 'p') { S.active && !S.sel.size ? playAroundDiff() : playAroundSelection(); return; }
+  if (e.key.toLowerCase() === 'j') { stepDiff(1); return; }
+  if (e.key.toLowerCase() === 'k') { stepDiff(-1); return; }
+  if (e.key.toLowerCase() === 'a' && S.active) { applySuggestion(activeDiff()); return; }
+  if (e.key.toLowerCase() === 'o' && S.active) { judge(activeDiff(), 'performance'); return; }
+  if (e.key.toLowerCase() === 'u' && S.active) { judge(activeDiff(), 'unknown'); return; }
   if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
     const ns = selNotes();
     if (!ns.length) return;
@@ -452,13 +473,14 @@ function ensureAudio() {
   audioGain = actx.createGain(); audioGain.gain.value = +$('vol-audio').value; audioGain.connect(actx.destination);
   const comp = actx.createDynamicsCompressor(); comp.connect(actx.destination);
   synthGain = actx.createGain(); synthGain.gain.value = +$('vol-midi').value; synthGain.connect(comp);
-  if (S.pendingAudio) decodeAudio(S.pendingAudio);
 }
 
+// 復号は音を出さない OfflineAudioContext で行う(再生用の AudioContext はユーザーの操作まで作れないため、
+// 開いた直後に波形を出せない)。AudioBuffer は再生用のコンテキストでもそのまま使える
 async function decodeAudio(buf) {
-  if (!actx) { S.pendingAudio = buf; return; }
-  S.pendingAudio = null;
-  S.audioBuf = await actx.decodeAudioData(buf);
+  S.audioBuf = await new OfflineAudioContext(1, 1, 44100).decodeAudioData(buf);
+  buildPeaks();
+  draw();
 }
 
 function voice(when, dur, pitch, vel, dest) {
@@ -515,6 +537,7 @@ const player = {
     const span = (W - KEYW) / S.view.pps;
     if (S.cursor > S.view.t0 + span * 0.9 || S.cursor < S.view.t0) { S.view.t0 = S.cursor - span * 0.1; clampView(); }
     if ((this.until && S.cursor >= this.until) || S.cursor > S.duration + 0.5) { this.stop(); return; }
+    followScore();
     draw();
     requestAnimationFrame(() => this.tick());
   },
@@ -546,7 +569,7 @@ function updatePanel() {
   const ns = S.notes.filter((n) => S.sel.has(n.id));
   const cs = S.candidates.filter((n) => S.sel.has(n.id));
   const info = $('sel-info'), vel = $('sel-vel');
-  const srcName = { model: 'モデルの出力', user: '人が追加', cand: '受け入れた候補' };
+  const srcName = { model: 'モデルの出力', user: '人が追加', cand: '受け入れた候補', score: '楽譜の提案で追加' };
   if (ns.length === 1 && !cs.length) {
     const n = ns[0];
     info.innerHTML = '';
@@ -564,6 +587,7 @@ function updatePanel() {
     '音の数': S.notes.length,
     '人が追加': S.notes.filter((n) => n.src === 'user').length,
     '受け入れた候補': S.notes.filter((n) => n.src === 'cand').length,
+    '楽譜の提案で追加': S.notes.filter((n) => n.src === 'score').length,
     '修正したモデルの音': S.notes.filter((n) => n.src === 'model' && n.edited).length,
     '削除': S.deleted.length,
     '未確認の候補': S.candidates.length,
@@ -633,16 +657,16 @@ async function openProject(name) {
     // 音のある範囲が見えるように縦位置を合わせる
     if (S.notes.length) {
       const mid = S.notes.map((n) => n.pitch).sort((a, b) => a - b)[Math.floor(S.notes.length / 2)];
-      S.view.y0 = (HI - mid) * S.view.rowH - (rollBottom() - RULER) / 2;
+      S.view.y0 = (HI - mid) * S.view.rowH - (rollBottom() - TOP) / 2;
     }
     clampView(); setDirty(false);
     history.replaceState(null, '', `?p=${encodeURIComponent(d.name)}`);
     $('proj-name').textContent = `${d.name}(${Math.round(d.duration)} 秒)` + (sv ? ` 保存 ${sv.saved_at}` : '');
     $('link-midi').classList.toggle('disabled', !sv);
     $('link-midi').href = `/api/projects/${encodeURIComponent(d.name)}/midi`;
-    // 楽譜との比較は別の画面(performance_analysis の側)。保存した MIDI をファイルで渡す
-    $('link-score').classList.remove('disabled');
-    $('link-score').href = `http://${location.hostname}:8766/?perf=${encodeURIComponent('editor:' + d.name)}`;
+    S.score = !!d.score; S.judg = (sv && sv.judgments) || {}; S.diffs = []; S.measures = []; S.active = null; S.ghost = null;
+    $('sheet-orig').innerHTML = ''; $('sheet-perf').innerHTML = '';
+    showScorePanel(); renderDiffs();
     updatePanel(); draw();
     await refreshProjects(d.name);
     const [ab, rr] = await Promise.all([api(`/api/projects/${encodeURIComponent(name)}/audio`),
@@ -650,13 +674,18 @@ async function openProject(name) {
     buildRoll(await rr.arrayBuffer(), +rr.headers.get('X-Frames'), +rr.headers.get('X-Keys'), +rr.headers.get('X-Fps'));
     await decodeAudio(await ab.arrayBuffer());
     draw();
-    status(`${d.name}: ${S.notes.length} 音。スペースで再生、ダブルクリックで音を追加、Delete で削除。`);
+    status(`${d.name}: ${S.notes.length} 音。スペースで再生、ダブルクリックで音を追加、Delete で削除。` +
+           (S.score ? ' 楽譜と照合しています…' : ' 楽譜を指定すると、楽譜との違いを確認できます。'));
+    if (S.score) await compareScore();
   } catch (err) { status('開けませんでした: ' + err.message); }
 }
 
 async function save() {
   if (!S.name) return;
-  const body = { notes: S.notes, candidates: S.candidates, deleted: S.deleted, pedal: S.pedal };
+  // 違いごとの判定と、そのときの違いの一覧も残す(採譜の誤りか演奏の違いかの記録)
+  const body = { notes: S.notes, candidates: S.candidates, deleted: S.deleted, pedal: S.pedal, judgments: S.judg,
+                 diffs: S.diffs.map((d) => ({ key: d.key, kind: d.kind, measure: d.measure, beat: d.beat, desc: d.desc,
+                                              reason: d.reason, judgment: (S.judg[d.key] || {}).status || null })) };
   try {
     const r = await (await api(`/api/projects/${encodeURIComponent(S.name)}/save`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json();
@@ -664,6 +693,310 @@ async function save() {
     $('link-midi').classList.remove('disabled');
     status(`保存しました(${r.saved_at}): ${r.midi}`);
   } catch (err) { status('保存に失敗しました: ' + err.message); }
+}
+
+
+// ---- 録音の波形(目盛りの下の帯)
+// 256 標本ごとの最小・最大をあらかじめ求めておき、縮小表示ではそれを、拡大表示では標本そのものを使う
+function buildPeaks() {
+  const x = S.audioBuf.getChannelData(0), B = 256, n = Math.ceil(x.length / B);
+  const mn = new Float32Array(n), mx = new Float32Array(n);
+  let peak = 1e-6;
+  for (let i = 0; i < n; i++) {
+    let a = 1, b = -1;
+    for (let j = i * B, e = Math.min(x.length, j + B); j < e; j++) { const v = x[j]; if (v < a) a = v; if (v > b) b = v; }
+    mn[i] = a; mx[i] = b; peak = Math.max(peak, -a, b);
+  }
+  S.peaks = { B, mn, mx, peak, sr: S.audioBuf.sampleRate, x };
+}
+
+function drawWave() {
+  const y0 = RULER, h = WAVE, mid = y0 + h / 2;
+  ctx2.fillStyle = '#fff'; ctx2.fillRect(KEYW, y0, W - KEYW, h);
+  ctx2.fillStyle = COLOR.grid; ctx2.fillRect(KEYW, y0 + h - 1, W - KEYW, 1);
+  // 選んだ音・違いの時間範囲を薄く示す
+  const spans = S.notes.filter((n) => S.sel.has(n.id)).map((n) => [n.on, n.off]);
+  if (S.ghost) spans.push([S.ghost.on, S.ghost.off]);
+  ctx2.fillStyle = 'rgba(237, 161, 0, .22)';
+  for (const [a, b] of spans) ctx2.fillRect(xOf(a), y0, Math.max(2, (b - a) * S.view.pps), h - 1);
+  if (!S.peaks) return;
+  const P = S.peaks, gain = +$('wave-gain').value, amp = (h / 2 - 3) * gain / P.peak;
+  const spp = P.sr / S.view.pps;   // 1 画素あたりの標本数
+  ctx2.fillStyle = COLOR.text2;
+  for (let px = KEYW; px < W; px++) {
+    const s0 = Math.floor(tOf(px) * P.sr), s1 = Math.floor(tOf(px + 1) * P.sr);
+    if (s1 <= 0 || s0 >= P.x.length) continue;
+    let a = 1, b = -1;
+    if (spp >= P.B) {
+      for (let i = Math.max(0, Math.floor(s0 / P.B)), e = Math.min(P.mn.length, Math.ceil(s1 / P.B)); i < e; i++) {
+        if (P.mn[i] < a) a = P.mn[i]; if (P.mx[i] > b) b = P.mx[i];
+      }
+    } else {
+      for (let j = Math.max(0, s0), e = Math.min(P.x.length, Math.max(s1, s0 + 1)); j < e; j++) { const v = P.x[j]; if (v < a) a = v; if (v > b) b = v; }
+    }
+    if (b < a) continue;
+    const yt = Math.max(y0 + 1, mid - b * amp), yb = Math.min(y0 + h - 2, mid - a * amp);
+    ctx2.fillRect(px, yt, 1, Math.max(1, yb - yt));
+  }
+}
+
+// ---- 楽譜との照合
+const KIND_LABEL = { missing: '抜け', extra: '余分', pitch: '弾き間違い', rhythm: 'リズム' };
+const KIND_COLOR = { missing: '#E34948', extra: '#E34948', pitch: '#EB6834', rhythm: '#6250D6' };
+const JUDG_LABEL = { fixed: '採譜を修正', performance: '演奏どおり', unknown: '不明' };
+const kindsShown = new Set(['missing', 'extra', 'pitch', 'rhythm']);
+let compareTimer = null, comparing = false, compareAgain = false;
+
+function scheduleCompare() {
+  if (!S.score || !$('auto-compare').checked) return;
+  clearTimeout(compareTimer);
+  compareTimer = setTimeout(compareScore, 1500);
+}
+
+async function compareScore() {
+  if (!S.name || !S.score) return;
+  if (comparing) { compareAgain = true; return; }
+  comparing = true;
+  status('楽譜と照合中…');
+  try {
+    const notes = S.notes.map((n) => ({ id: n.id, on: n.on, off: n.off, pitch: n.pitch, vel: n.vel }));
+    const r = await (await api(`/api/projects/${encodeURIComponent(S.name)}/compare`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ notes }) })).json();
+    S.diffs = r.diffs; S.measures = r.measures; lastFollow = null;
+    for (const [id, svg] of [['sheet-orig', r.original_svg], ['sheet-perf', r.performance_svg]]) {
+      const el = $(id), top = el.scrollTop;
+      el.innerHTML = svg; el.scrollTop = top;
+    }
+    if (S.active && !S.diffs.some((d) => d.key === S.active)) { S.active = null; S.ghost = null; }
+    renderDiffs(); draw();
+    const todo = S.diffs.filter((d) => !S.judg[d.key]).length;
+    status(`楽譜と照合しました(${r.seconds} 秒): 違い ${S.diffs.length} 件、うち未判定 ${todo} 件。J / K で順に見られます。`);
+  } catch (err) { status('楽譜と照合できませんでした: ' + err.message); }
+  comparing = false;
+  if (compareAgain) { compareAgain = false; scheduleCompare(); }
+}
+
+function showScorePanel() {
+  const hpct = +$('score-height').value;
+  $('score-panel').hidden = !S.score || !hpct;
+  $('score-panel').style.height = hpct + '%';
+  $('diff-empty').hidden = S.score;
+  $('diff-tools').hidden = !S.score;
+  resize();
+}
+
+const activeDiff = () => S.diffs.find((d) => d.key === S.active);
+
+function shownDiffs() {
+  const st = $('diff-status').value;
+  let ds = S.diffs.filter((d) => kindsShown.has(d.kind));
+  if (st === 'todo') ds = ds.filter((d) => !S.judg[d.key]);
+  if (st === 'done') ds = ds.filter((d) => S.judg[d.key]);
+  if ($('diff-sort').value === 'doubt') {
+    // 確認が必要な順: 提案の確からしさが 0.5 に近いもの(どちらとも言えないもの)から
+    const doubt = (d) => d.confidence === null || d.confidence === undefined ? 1 : Math.abs(d.confidence - 0.5);
+    ds = ds.slice().sort((a, b) => doubt(a) - doubt(b));
+  }
+  return ds;
+}
+
+function renderDiffs() {
+  if (!S.score) { $('diff-list').innerHTML = ''; $('diff-detail').hidden = true; return; }
+  const cnt = (k) => S.diffs.filter((d) => d.kind === k).length;
+  const done = S.diffs.filter((d) => S.judg[d.key]).length;
+  $('diff-summary').textContent = `違い ${S.diffs.length} 件(判定済み ${done})`;
+  $('diff-kinds').innerHTML = Object.keys(KIND_LABEL).map((k) =>
+    `<label><input type="checkbox" data-k="${k}" ${kindsShown.has(k) ? 'checked' : ''}><span style="color:${KIND_COLOR[k]}">●</span>${KIND_LABEL[k]} ${cnt(k)}</label>`).join('');
+  $('diff-kinds').querySelectorAll('input').forEach((el) => {
+    el.onchange = () => { el.checked ? kindsShown.add(el.dataset.k) : kindsShown.delete(el.dataset.k); renderDiffs(); };
+  });
+  const ol = $('diff-list');
+  ol.innerHTML = '';
+  for (const d of shownDiffs().slice(0, 500)) {
+    const li = document.createElement('li');
+    const j = S.judg[d.key];
+    li.className = d.key === S.active ? 'active' : '';
+    li.innerHTML = `<div class="head"><span class="kind" style="color:${KIND_COLOR[d.kind]}">● ${KIND_LABEL[d.kind]}</span>` +
+      `<span class="m">${d.measure}小節 ${(d.beat + 1).toFixed(2).replace(/\.?0+$/, '')}拍</span>` +
+      `<span class="badge ${j ? j.status : ''}">${j ? JUDG_LABEL[j.status] : '未判定'}</span></div>` +
+      `<div class="desc"></div><div class="why"></div>`;
+    li.querySelector('.desc').textContent = d.desc;
+    li.querySelector('.why').textContent = d.reason;
+    li.onclick = () => selectDiff(d);
+    ol.appendChild(li);
+  }
+  renderDetail();
+}
+
+function renderDetail() {
+  const d = activeDiff(), box = $('diff-detail');
+  if (!d) { box.hidden = true; return; }
+  box.hidden = false;
+  const j = S.judg[d.key];
+  box.innerHTML = `<div class="title"></div><div class="why"></div><div class="acts"></div>`;
+  box.querySelector('.title').textContent = `${KIND_LABEL[d.kind]} ${d.measure}小節: ${d.desc}` + (j ? `(${JUDG_LABEL[j.status]})` : '');
+  box.querySelector('.why').textContent = d.reason;
+  const acts = box.querySelector('.acts');
+  const btn = (label, title, fn) => { const b = document.createElement('button'); b.textContent = label; b.title = title; b.onclick = fn; acts.appendChild(b); };
+  if (d.suggestion) btn(d.suggestion.label + '(A)', '採譜の誤りとして、提案どおりに MIDI を直す', () => applySuggestion(d));
+  btn('演奏どおり(O)', '奏者がそのように弾いた。MIDI は直さない', () => judge(d, 'performance'));
+  btn('不明(U)', '録音を聴いても判断できない', () => judge(d, 'unknown'));
+  btn('前後を再生(P)', '録音と MIDI をこの付近で再生する', () => playAroundDiff());
+  if (j) btn('判定を取り消す', '', () => judge(d, null));
+}
+
+function diffTime(d) {
+  if (d.time !== undefined && d.time !== null) return d.time;
+  const m = S.measures.find((x) => String(x.n) === String(d.measure));
+  return m ? m.t0 : S.cursor;
+}
+
+function selectDiff(d) {
+  S.active = d.key;
+  S.ghost = d.suggestion && d.suggestion.action === 'add' ? d.suggestion.note : null;
+  const t = diffTime(d);
+  const span = (W - KEYW) / S.view.pps;
+  S.view.t0 = t - span * 0.35; S.cursor = Math.max(0, t - 0.5);
+  const pitch = d.suggestion && d.suggestion.note ? d.suggestion.note.pitch
+    : (S.notes.find((n) => n.id === d.note_id) || {}).pitch;
+  if (pitch) S.view.y0 = (HI - pitch) * S.view.rowH - (rollBottom() - TOP) / 2;
+  S.sel = new Set(d.note_id && S.notes.some((n) => n.id === d.note_id) ? [d.note_id] : []);
+  clampView();
+  revealMeasure($('sheet-orig'), d.measure, true);
+  revealMeasure($('sheet-perf'), d.measure, true);
+  updatePanel(); renderDiffs(); draw();
+  const li = $('diff-list').querySelector('li.active');
+  if (li) li.scrollIntoView({ block: 'nearest' });
+}
+
+function stepDiff(k) {
+  const ds = shownDiffs();
+  if (!ds.length) return;
+  const i = ds.findIndex((d) => d.key === S.active);
+  selectDiff(ds[Math.min(ds.length - 1, Math.max(0, i < 0 ? 0 : i + k))]);
+}
+
+function judge(d, status) {
+  if (!d) return;
+  pushUndo(false);
+  if (status) S.judg[d.key] = { status, kind: d.kind, measure: d.measure, desc: d.desc, at: new Date().toISOString() };
+  else delete S.judg[d.key];
+  renderDiffs();
+  if (status && $('diff-status').value === 'todo') stepDiff(0);
+}
+
+// 提案を当てはめる。足す音は録音から求めた発音時刻・ベロシティ(方法 A)・離鍵で置く
+async function applySuggestion(d, quiet = false) {
+  if (!d || !d.suggestion) return;
+  const sg = d.suggestion;
+  if (!quiet) pushUndo();
+  if (sg.action === 'add') {
+    const n = { id: 's' + S.nextId++, on: sg.note.on, off: sg.note.off, pitch: sg.note.pitch, vel: sg.note.vel,
+                src: 'score', edited: true, refined: !sg.note.weak, weak: !!sg.note.weak, from_diff: d.key };
+    S.notes.push(n);
+  } else if (sg.action === 'delete') {
+    const n = S.notes.find((x) => x.id === d.note_id);
+    if (n && n.src === 'model') S.deleted.push({ id: n.id, on: n.on, off: n.off, pitch: n.pitch, vel: n.vel, from_diff: d.key });
+    S.notes = S.notes.filter((x) => x.id !== d.note_id);
+  } else if (sg.action === 'set_pitch') {
+    const n = S.notes.find((x) => x.id === d.note_id);
+    if (n) { n.pitch = sg.pitch; markEdited(n); n.from_diff = d.key; }
+  }
+  S.judg[d.key] = { status: 'fixed', kind: d.kind, measure: d.measure, desc: d.desc, action: sg.action, at: new Date().toISOString() };
+  if (quiet) return;
+  S.ghost = null;
+  if (sg.action === 'set_pitch') await refine([d.note_id]);   // 新しい音高で録音に合わせ直す
+  updatePanel(); renderDiffs(); draw();
+  if ($('diff-status').value === 'todo') stepDiff(0);
+}
+
+async function applyShown() {
+  const ds = shownDiffs().filter((d) => d.suggestion && !S.judg[d.key]);
+  if (!ds.length) { status('当てはめられる未判定の提案がありません。'); return; }
+  const n = { add: 0, delete: 0, set_pitch: 0 };
+  ds.forEach((d) => n[d.suggestion.action]++);
+  if (!confirm(`一覧に出ている未判定の提案 ${ds.length} 件を当てはめます(足す ${n.add}、消す ${n.delete}、音高を直す ${n.set_pitch})。\n` +
+               '提案は検証で 7〜9 割程度しか正しくありません。よろしいですか?')) return;
+  pushUndo();
+  for (const d of ds) await applySuggestion(d, true);
+  const ids = ds.filter((d) => d.suggestion.action === 'set_pitch').map((d) => d.note_id);
+  if (ids.length) await refine(ids);
+  S.ghost = null;
+  updatePanel(); renderDiffs(); draw();
+  status(`${ds.length} 件の提案を当てはめました。元に戻す(⌘/Ctrl+Z)で取り消せます。`);
+}
+
+function playAroundDiff() {
+  const d = activeDiff();
+  if (!d) return;
+  S.cursor = Math.max(0, diffTime(d) - 1.0);
+  player.play(S.cursor, 2.5);
+}
+
+// ---- 楽譜の表示: 小節の位置、強調、クリックでその時刻へ、再生に追従
+function measureEl(sheet, n) { return sheet.querySelector(`g.measure[data-n="${CSS.escape(String(n))}"]`); }
+function measureRect(m) {
+  const lines = m.querySelectorAll(':scope > g.staff > path');
+  if (!lines.length) return m.getBoundingClientRect();
+  let l = Infinity, t = Infinity, r = -Infinity, b = -Infinity;
+  for (const x of lines) { const q = x.getBoundingClientRect(); l = Math.min(l, q.left); t = Math.min(t, q.top); r = Math.max(r, q.right); b = Math.max(b, q.bottom); }
+  return { left: l, top: t - 12, width: r - l, height: b - t + 24, bottom: b + 12 };
+}
+function placeBox(sheet, m, cls) {
+  const sr = sheet.getBoundingClientRect(), r = measureRect(m);
+  let el = cls === 'cur' ? sheet.querySelector('.hl.cur') : null;
+  if (!el) { el = document.createElement('div'); el.className = 'hl' + (cls ? ' ' + cls : ''); sheet.appendChild(el); }
+  el.style.left = (r.left - sr.left - 4) + 'px';
+  el.style.top = (r.top - sr.top + sheet.scrollTop - 4) + 'px';
+  el.style.width = (r.width + 8) + 'px';
+  el.style.height = (r.height + 8) + 'px';
+  return el;
+}
+function revealMeasure(sheet, n, flash) {
+  const m = measureEl(sheet, n);
+  if (!m || $('score-panel').hidden) return;
+  const sr = sheet.getBoundingClientRect(), mr = measureRect(m);
+  if (mr.top < sr.top + 10 || mr.bottom > sr.bottom - 10) sheet.scrollTop += mr.top - sr.top - 20;
+  if (flash) {
+    const el = placeBox(sheet, m, '');
+    setTimeout(() => { el.style.opacity = 0; }, 1200);
+    setTimeout(() => el.remove(), 2600);
+  }
+}
+let lastFollow = null;
+function followScore() {
+  if (!S.score || !S.measures.length || $('score-panel').hidden) return;
+  const m = S.measures.find((x) => S.cursor >= x.t0 && S.cursor < x.t1);
+  if (!m || m.n === lastFollow) return;
+  lastFollow = m.n;
+  for (const sheet of [$('sheet-orig'), $('sheet-perf')]) {
+    revealMeasure(sheet, m.n, false);
+    const el = measureEl(sheet, m.n);
+    if (el) placeBox(sheet, el, 'cur');
+  }
+}
+for (const id of ['sheet-orig', 'sheet-perf']) {
+  $(id).addEventListener('click', (e) => {
+    const g = e.target.closest('g.measure');
+    if (!g) return;
+    const m = S.measures.find((x) => String(x.n) === g.dataset.n);
+    if (!m) return;
+    const span = (W - KEYW) / S.view.pps;
+    S.cursor = m.t0; S.view.t0 = m.t0 - span * 0.1; clampView();
+    lastFollow = null; followScore(); draw();
+    if (player.playing) player.play(S.cursor);
+  });
+}
+
+async function setScore(body, label) {
+  if (!S.name) { status('先にプロジェクトを開いてください。'); return; }
+  try {
+    const url = `/api/projects/${encodeURIComponent(S.name)}/score` + (label ? `?name=${encodeURIComponent(label)}` : '');
+    const r = await (await api(url, { method: 'POST', body })).json();
+    S.score = true; showScorePanel();
+    status(`楽譜を指定しました(${r.measures} 小節、${r.notes} 音)。照合します…`);
+    await compareScore();
+  } catch (err) { status('楽譜を指定できませんでした: ' + err.message); }
 }
 
 // ---- ボタン類
@@ -681,13 +1014,23 @@ $('btn-refine-all').onclick = refineAll;
 $('btn-undo').onclick = undo;
 $('btn-redo').onclick = redoAct;
 $('btn-save').onclick = save;
+$('btn-compare').onclick = compareScore;
+$('auto-compare').onchange = (e) => { if (e.target.checked) scheduleCompare(); };
+$('score-height').onchange = showScorePanel;
+$('wave-gain').onchange = draw;
+$('diff-status').onchange = renderDiffs;
+$('diff-sort').onchange = renderDiffs;
+$('btn-apply-shown').onclick = applyShown;
+$('btn-score-path').onclick = () => { const p = $('score-path').value.trim(); if (p) setScore(JSON.stringify({ path: p })); };
+$('score-file').onchange = (e) => { const f = e.target.files[0]; if (f) setScore(f, f.name); e.target.value = ''; };
 $('btn-open-project').onclick = () => { const n = $('projects').value; if (n) openProject(n); };
 $('btn-open-path').onclick = async () => {
   const path = $('wav-path').value.trim();
   if (!path) return;
   try {
+    const score = $('score-path-new').value.trim() || undefined;
     const r = await (await api('/api/open', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-                                              body: JSON.stringify({ path }) })).json();
+                                              body: JSON.stringify({ path, score }) })).json();
     await refreshProjects(r.name); openProject(r.name);
   } catch (err) { status('読み込めませんでした: ' + err.message); }
 };

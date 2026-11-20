@@ -24,8 +24,7 @@ from music_io import midi, musicxml, pedb
 from alignment import align, notation
 
 STATIC = os.path.abspath(os.path.join(os.path.dirname(__file__), 'static'))
-VEROVIO = {'pageWidth': 2100, 'pageHeight': 60000, 'scale': 35, 'adjustPageHeight': True, 'footer': 'none',
-           'header': 'none', 'svgAdditionalAttribute': ['measure@n'], 'svgViewBox': True}
+VEROVIO = notation.VEROVIO
 
 
 class Viewer:
@@ -109,10 +108,10 @@ class Viewer:
         if key in self.cache:
             return self.cache[key]
         t0 = time.time()
-        diffs, place, orig_kind, measures, tpqn = notation.compare(xml, m, miss)
+        diffs, place, orig_kind, measures, tpqn, _ = notation.compare(xml, m, miss)
         perf_xml = notation.build_performance_score(xml, place, measures, tpqn)
         orig_xml = musicxml.colored(xml, {i: notation.COLORS[k] for i, k in orig_kind.items()})
-        svgs = self.render_thread.submit(_render, [orig_xml, perf_xml]).result()
+        svgs = self.render_thread.submit(notation.render_svgs, [orig_xml, perf_xml], VEROVIO).result()
         counts = {k: sum(d['kind'] == k for d in diffs) for k in notation.LABELS}
         n_perf = sum(1 for r in m if r['status'] != 1)
         res = dict(original_svg=svgs[0], performance_svg=svgs[1], diffs=diffs, counts=counts, labels=notation.LABELS,
@@ -120,18 +119,6 @@ class Viewer:
                    seconds=round(time.time() - t0, 2))
         self.cache = {key: res}   # 直近の1つだけ持つ
         return res
-
-
-def _render(xmls):
-    import verovio
-    tk = verovio.toolkit()
-    tk.setOptions(VEROVIO)
-    svgs = []
-    for data in xmls:
-        if not tk.loadData(data):
-            raise ValueError('楽譜の描画に失敗しました: ' + tk.getLog()[-300:])
-        svgs.append(''.join(tk.renderToSVG(p) for p in range(1, tk.getPageCount() + 1)))
-    return svgs
 
 
 def make_handler(viewer):

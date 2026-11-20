@@ -60,7 +60,8 @@ class TimeMap:
 
 def compare(xml_path, perf_rows, missing):
     """元の楽譜(MusicXML)と、対応付けの結果(load_match の形)から、違いのリストと書き起こしの材料を作る。
-    戻り値: (違いのリスト, 演奏の楽譜に置く音のリスト, 元の楽譜の音符ID -> 違いの種類)"""
+    戻り値: (違いのリスト, 演奏の楽譜に置く音のリスト, 元の楽譜の音符ID -> 違いの種類, 小節のリスト, TPQN, 時刻の写像)
+    違いの row は演奏音の番号(perf_rows の id)。抜けには楽譜の拍(score_beat)と音高を付ける"""
     tpqn, score, dups, measures = musicxml.read(xml_path)
     groups = {i: g for g in dups for i in g}
     starts = np.array([m['start'] for m in measures]) / tpqn
@@ -95,7 +96,7 @@ def compare(xml_path, perf_rows, missing):
                 item.update(kind='pitch')
                 orig_kind[r['note_id']] = 'pitch'
                 mn, off = where(b0)
-                diffs.append(dict(kind='pitch', measure=mn, beat=off, ids=[r['note_id']], on=r['on'],
+                diffs.append(dict(kind='pitch', measure=mn, beat=off, ids=[r['note_id']], on=r['on'], row=r['id'],
                                   desc=f"{n['pitch_name']} → {_plain_name(p)}"))
             else:
                 item['name'] = n['pitch_name']
@@ -110,7 +111,7 @@ def compare(xml_path, perf_rows, missing):
                             item['beat'] = _quantize(bl)
                         orig_kind[r['note_id']] = 'rhythm'
                         mn, off = where(b0)
-                        diffs.append(dict(kind='rhythm', measure=mn, beat=off, ids=[r['note_id']], on=r['on'],
+                        diffs.append(dict(kind='rhythm', measure=mn, beat=off, ids=[r['note_id']], on=r['on'], row=r['id'],
                                           desc=f"{n['pitch_name']} {abs(dev):.2f}拍({ms:.0f}ms){'遅い' if dev > 0 else '早い'}"))
             place.append(item)
         elif r['note_id'] == '*':
@@ -119,7 +120,8 @@ def compare(xml_path, perf_rows, missing):
             place.append(dict(beat=b, dur=None, pitch=p, staff=st, voice=9, name=None, kind='extra', note_id=None,
                               on=r['on'], off=r['off']))
             mn, off = where(b)
-            diffs.append(dict(kind='extra', measure=mn, beat=off, ids=[], on=r['on'], desc=_plain_name(p)))
+            diffs.append(dict(kind='extra', measure=mn, beat=off, ids=[], on=r['on'], row=r['id'], pitch=p,
+                              desc=_plain_name(p)))
     for i in missing:
         if i not in score or score[i]['kind'] != 'chord':
             continue
@@ -128,7 +130,8 @@ def compare(xml_path, perf_rows, missing):
         n = score[i]
         orig_kind[i] = 'missing'
         mn, off = where(n['stime'] / tpqn)
-        diffs.append(dict(kind='missing', measure=mn, beat=off, ids=[i], on=None, desc=n['pitch_name']))
+        diffs.append(dict(kind='missing', measure=mn, beat=off, ids=[i], on=None, pitch=n['pitch'],
+                          score_beat=n['stime'] / tpqn, desc=n['pitch_name']))
     # 余分な音の長さ: 同じ段の次の発音まで(ペダル込みの採譜では離鍵が当てにならないため)。1/4〜1拍に収める
     by_staff = {}
     for it in place:
@@ -140,7 +143,7 @@ def compare(xml_path, perf_rows, missing):
             it['dur'] = float(np.clip(_quantize(gap), 0.25, 1.0))
     order = {'missing': 0, 'pitch': 1, 'extra': 2, 'rhythm': 3}
     diffs.sort(key=lambda d: (_num(d['measure']), d['beat'], order[d['kind']]))
-    return diffs, place, orig_kind, measures, tpqn
+    return diffs, place, orig_kind, measures, tpqn, tm
 
 
 def _num(m):
@@ -159,6 +162,7 @@ def build_performance_score(xml_path, place, measures, tpqn):
     """元の楽譜を型にして、place の音を置いた楽譜(MusicXML の文字列)を作る"""
     from music21 import chord, converter, note, stream, tie
     from music21.musicxml.m21ToXml import GeneralObjectExporter
+    from music21.stream.makeNotation import makeBeams
 
     sc = converter.parse(xml_path, forceSource=True)   # music21 のキャッシュ(書き換えた楽譜が残ることがある)を使わない
     # 音符につながる線(スラーなど)は外す。ピアノの大括弧(StaffGroup)は残す
@@ -218,7 +222,8 @@ def build_performance_score(xml_path, place, measures, tpqn):
                 v = stream.Voice(id=str(vi))
                 for g in sorted(vv['groups'], key=lambda g: g['key'][0]):
                     o, d = g['key']
-                    if d <= 0:
+                    d = min(d, mlen - o)   # 格子に丸めたことで小節の末尾をはみ出した分は切り詰める
+                    if d <= 1e-6:
                         continue
                     ns = []
                     for it in g['items']:
@@ -247,7 +252,18 @@ def build_performance_score(xml_path, place, measures, tpqn):
         for ins in part.recurse().getElementsByClass('Instrument'):
             ins.partName = ''
             ins.instrumentName = ''
+    # 書き表せない長さ(例: 5/12 拍)の音・休符をタイでつないだ音符に分け、小節ごとに連桁を付ける
+    sc.splitAtDurations(recurse=True)
+    for part in parts:
+        for m in part.getElementsByClass(stream.Measure):
+            try:
+                makeBeams(m, inPlace=True)
+            except Exception:
+                pass   # 拍子記号より長い小節などでは連桁を付けない(旗のまま)
     ex = GeneralObjectExporter(sc)
+    # 小節はここで組み立て済み。music21 の記譜の自動処理は拍子記号どおりの小節の長さを前提にするので、
+    # 拍子記号より長い小節(カデンツァなど)で落ちる。切っておく
+    ex.makeNotation = False
     return ex.parse().decode('utf-8')
 
 
@@ -260,3 +276,21 @@ def _m21_name(it, fifths):
     sharp = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
     flat = ['C', 'D-', 'D', 'E-', 'E', 'F', 'G-', 'G', 'A-', 'A', 'B-', 'B']
     return (flat if fifths < 0 else sharp)[p % 12] + str(p // 12 - 1)
+
+
+VEROVIO = {'pageWidth': 2100, 'pageHeight': 60000, 'scale': 35, 'adjustPageHeight': True, 'footer': 'none',
+           'header': 'none', 'svgAdditionalAttribute': ['measure@n'], 'svgViewBox': True}
+
+
+def render_svgs(xmls, options=None):
+    """MusicXML の文字列を Verovio で SVG にする(ページはつなぐ)。
+    注意: Verovio は最初に使ったスレッドでしか正しく動かないので、サーバーでは1本のスレッドから呼ぶこと"""
+    import verovio
+    tk = verovio.toolkit()
+    tk.setOptions(options or VEROVIO)
+    svgs = []
+    for data in xmls:
+        if not tk.loadData(data):
+            raise ValueError('楽譜の描画に失敗しました: ' + tk.getLog()[-300:])
+        svgs.append(''.join(tk.renderToSVG(p) for p in range(1, tk.getPageCount() + 1)))
+    return svgs

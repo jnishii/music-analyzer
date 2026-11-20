@@ -164,11 +164,11 @@ def read(path):
                 measures.append(dict(number=mnum, index=mk, start=start, length=length, beats=beats,
                                      beat_type=beat_type, fifths=fifths))
             start += length
-    # 共有音: 同じ楽譜時刻・同じ音高・同じ段で、別の声部にある通常の音
+    # 共有音: 同じ楽譜時刻・同じ音高で、別の声部にある通常の音(段が違うこともある。演奏では1回だけ弾かれる)
     groups = {}
     for i, n in notes.items():
         if n['kind'] == 'chord':
-            groups.setdefault((n['stime'], n['pitch'], n['staff']), []).append(i)
+            groups.setdefault((n['stime'], n['pitch']), []).append(i)
     dups = [g for g in groups.values() if len(g) > 1]
     return tpqn, notes, dups, measures
 
