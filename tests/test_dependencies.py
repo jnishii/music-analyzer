@@ -2,21 +2,23 @@
 
 将来リポジトリを分けられるように、依存は次の向きだけに限る。
   music_io             -> (なし)
-  piano_transcribe     -> music_io
+  alignment            -> music_io(楽譜と演奏の対応付け。採譜と演奏分析の共通の土台)
+  piano_transcribe     -> music_io, alignment
   score_analysis       -> music_io
-  performance_analysis -> music_io, score_analysis
+  performance_analysis -> music_io, score_analysis, alignment
 scripts/ の下のフォルダも、対応するパッケージと同じ規則に従う。
 """
 import ast
 import pathlib
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-OURS = {'music_io', 'piano_transcribe', 'score_analysis', 'performance_analysis'}
+OURS = {'music_io', 'alignment', 'piano_transcribe', 'score_analysis', 'performance_analysis'}
 ALLOWED = {
     'music_io': set(),
-    'piano_transcribe': {'music_io'},
+    'alignment': {'music_io'},
+    'piano_transcribe': {'music_io', 'alignment'},
     'score_analysis': {'music_io'},
-    'performance_analysis': {'music_io', 'score_analysis'},
+    'performance_analysis': {'music_io', 'score_analysis', 'alignment'},
 }
 SCRIPT_DIRS = {'transcribe': 'piano_transcribe', 'score': 'score_analysis', 'performance': 'performance_analysis'}
 

@@ -21,7 +21,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import numpy as np
 
 from music_io import midi, musicxml, pedb
-from performance_analysis import align, notation
+from alignment import align, notation
 
 STATIC = os.path.abspath(os.path.join(os.path.dirname(__file__), 'static'))
 VEROVIO = {'pageWidth': 2100, 'pageHeight': 60000, 'scale': 35, 'adjustPageHeight': True, 'footer': 'none',

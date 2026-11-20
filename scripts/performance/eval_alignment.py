@@ -28,7 +28,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'src'))
 import glob  # noqa: E402
 
 from music_io import midi, musicxml, pedb  # noqa: E402
-from performance_analysis import align  # noqa: E402
+from alignment import align  # noqa: E402
 
 # 調整に使う曲(採譜の評価で guided の調整に使った8演奏の曲)
 DEV_PIECES = ['bac-inv001', 'chp-etd003', 'moz-snt331-1', 'chp-nct002', 'deb-pld108', 'bet-snt014-1', 'sch-knd007']

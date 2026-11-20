@@ -9,7 +9,7 @@ import numpy as np
 from music_io import pedb
 from score_analysis import melody
 
-from . import align
+from alignment import align
 
 COLS = ['performance', 'note_id', 'bar', 'beat', 'staff', 'voice', 'pitch', 'pitch_name', 'dur_beats', 'ornament',
         'melody', 'status', 'n_perf_notes', 'onset', 'offset', 'velocity', 'velocity_z', 'local_tempo_bpm',
