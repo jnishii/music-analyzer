@@ -1,4 +1,4 @@
-# music-analysis
+# music-analyzer
 
 楽譜と演奏を対応付けて、演奏の「楽譜からのずれ」（テンポ・タイミング・強さ）を分析するためのコード。
 最初の題材は CrestMusePEDB 2nd edition（Disklavier による録音と同時記録MIDI、楽譜、対応付けの正解つき）。
