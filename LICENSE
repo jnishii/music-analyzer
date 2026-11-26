@@ -1,0 +1,25 @@
+Copyright (c) 2026 jun. All rights reserved.
+
+【日本語】
+このリポジトリのソースコード、文章(README、docs/ など)の著作権は jun にあります。
+ソースコードは閲覧できるように置いていますが、オープンソースではありません。
+複製、改変、再配布、販売、およびこれを元にした別のソフトウェアやサービスの公開には、
+著作権者の許可が必要です。
+
+次のものは、このリポジトリに含まれていません。それぞれの権利者の条件に従います。
+  - CrestMusePEDB(研究用の登録制データ。再配布できません)
+  - 採譜モデルの重み(models/、Kong らによる。CC BY 4.0)
+  - 依存するライブラリ(THIRD_PARTY_NOTICES.md を参照)
+
+【English】
+Copyright (c) 2026 jun. All rights reserved.
+
+The source code and documentation in this repository (README, docs/, etc.) are
+copyrighted by jun. The source is viewable, but this is NOT open-source software.
+Copying, modification, redistribution, sale, and publishing of other software or
+services based on it require the written permission of the copyright holder.
+
+The following are not part of this repository and remain subject to their own
+owners' terms: the CrestMusePEDB dataset (registered research use only; not
+redistributable), the transcription model weights (Kong et al., CC BY 4.0), and
+the third-party libraries listed in THIRD_PARTY_NOTICES.md.
