@@ -4,7 +4,7 @@
 MAESTRO(Disklavier の演奏)で学習済みのモデル。入力は 16kHz のモノラル。
 
 必要なもの
-  pip install torch piano_transcription_inference
+  uv sync --locked --extra transcribe
   重み: 環境変数 KONG_CHECKPOINT か models/CRNN_note_F1=0.9677_pedal_F1=0.9186.pth
         (https://zenodo.org/record/4034264 から取得。git の管理外)
 """

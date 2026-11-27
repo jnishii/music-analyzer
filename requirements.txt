@@ -1,2 +1,0 @@
-# pip install -e '.[transcribe,analysis,score,dev]' と同じ
--e .[transcribe,analysis,score,dev]

@@ -46,9 +46,25 @@ tests/
 
 ## 準備
 
+### 環境の構築(uv)
+
+[uv](https://docs.astral.sh/uv/) を使う。Python の版は `.python-version`、パッケージの版は `uv.lock` で固定しているので、
+別のマシンでも同じ環境になる(uv の導入は macOS なら `brew install uv`)。
+
 ```sh
-python3 -m venv .venv
-.venv/bin/pip install -e '.[transcribe,analysis,score,dev]'    # requirements.txt と同じ
+uv sync --locked --all-extras     # .venv を作り、uv.lock の版を入れる。Python 3.12 がなければ uv が取得する
+source .venv/bin/activate         # 以下の python3 のコマンドは、この状態で実行する(または uv run python3 ...)
+python3 -m pytest tests
+```
+
+- `--all-extras` を省くと numpy しか入らない。一部だけなら `--extra analysis --extra dev` のように指定する
+- `uv sync` は `.venv` を `uv.lock` の内容に合わせるので、手で追加したパッケージは削除される
+- 依存を変えるときは `pyproject.toml` を編集して(または `uv add`)`uv lock` を実行し、`pyproject.toml` と `uv.lock` を一緒にコミットする
+- 版を上げるときは `uv lock --upgrade`。上げた後は採譜が動くことを確認する
+
+### 採譜モデルの重み
+
+```sh
 # 採譜モデルの重み(約170MB、git の管理外)
 mkdir -p models
 curl -L -o "models/CRNN_note_F1=0.9677_pedal_F1=0.9186.pth" \

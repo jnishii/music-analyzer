@@ -11,7 +11,8 @@ dependencies = ["numpy"]
 
 [project.optional-dependencies]
 # 採譜モデル(Kong ら)を使うとき
-transcribe = ["torch", "piano_transcription_inference"]
+# audioread は piano_transcription_inference が使うが依存に含まれていない(librosa 1.0 以降は入らない)
+transcribe = ["torch", "piano_transcription_inference", "audioread"]
 # 演奏分析の図
 analysis = ["pandas", "matplotlib"]
 # 楽譜の表示(元の楽譜と演奏から書き起こした楽譜の比較)

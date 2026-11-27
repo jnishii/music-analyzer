@@ -325,7 +325,7 @@ def make_handler(store):
             except ValueError as e:
                 self._send(400, {'error': str(e)})
             except ImportError as e:
-                self._send(400, {'error': f'楽譜の機能には music21 と verovio が必要です(pip install -e .[score]): {e}'})
+                self._send(400, {'error': f'楽譜の機能には music21 と verovio が必要です(uv sync --locked --all-extras): {e}'})
             except Exception as e:
                 traceback.print_exc()
                 self._send(500, {'error': f'{type(e).__name__}: {e}'})

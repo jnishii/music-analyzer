@@ -92,5 +92,6 @@
 - コメントと出力の文言は日本語
 - 評価は曲単位・奏者単位で分けて、調整に使ったデータで精度を測らない(交差検証は1曲抜き)
 - パッケージ間の依存の向きを守る(python -m pytest tests)
-- 環境はリポジトリ内の .venv(pip install -e '.[transcribe,analysis,dev]')。採譜モデルの重みは models/(git の管理外)
+- 環境は uv で作る(uv sync --locked --all-extras、リポジトリ内の .venv。Python の版は .python-version、パッケージの版は uv.lock)。
+  パッケージの追加は pip ではなく uv add を使い、pyproject.toml と uv.lock を一緒にコミットする。採譜モデルの重みは models/(git の管理外)
 - コミットの作者はリポジトリのローカル設定(jnishii)
